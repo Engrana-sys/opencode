@@ -141,6 +141,12 @@ export interface Interface {
     readonly retryAfterMs?: number
   }) => Effect.Effect<void, WorkerNotFoundError>
 
+  /** Records the tree a writing worker was given, once it is admitted to run. */
+  readonly assignWorktree: (input: {
+    readonly workerID: Job.WorkerID
+    readonly worktree: Job.Worktree
+  }) => Effect.Effect<void, WorkerNotFoundError>
+
   /** Renews a worker's lease. Silence here is what recovery reads as abandonment. */
   readonly heartbeat: (input: {
     readonly workerID: Job.WorkerID
@@ -333,6 +339,16 @@ const layer = Layer.effect(
       })
     })
 
+    const assignWorktree: Interface["assignWorktree"] = Effect.fn("Job.assignWorktree")(function* (input) {
+      const worker = yield* requireWorker(input.workerID)
+      yield* events.publish(JobEvent.WorkerWorktreeAssigned, {
+        jobID: worker.jobID,
+        timestamp: yield* DateTime.now,
+        workerID: input.workerID,
+        worktree: input.worktree,
+      })
+    })
+
     const heartbeat: Interface["heartbeat"] = Effect.fn("Job.heartbeat")(function* (input) {
       const worker = yield* requireWorker(input.workerID)
       const now = yield* DateTime.now
@@ -421,6 +437,7 @@ const layer = Layer.effect(
       settleStep,
       createWorker,
       workerStatus,
+      assignWorktree,
       heartbeat,
       startAttempt,
       resolveModel,

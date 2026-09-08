@@ -116,6 +116,20 @@ export const WorkerStatusChanged = Event.define({
   },
 })
 
+/**
+ * A writing worker was given its own tree.
+ *
+ * Separate from `WorkerCreated` because provisioning happens when the worker is
+ * admitted, not when it is queued: a checkout per worker that may never run is
+ * a checkout wasted, and a job cancelled before it starts should leave no trees
+ * behind.
+ */
+export const WorkerWorktreeAssigned = Event.define({
+  type: "job.worker.worktree.assigned",
+  ...options,
+  schema: { ...Base, workerID: Job.WorkerID, worktree: Job.Worktree },
+})
+
 /** Renews a worker's lease. Absence of these is how recovery finds abandoned work. */
 export const WorkerHeartbeat = Event.define({
   type: "job.worker.heartbeat",
@@ -199,6 +213,7 @@ export const Definitions = Event.inventory(
   StepSettled,
   WorkerCreated,
   WorkerStatusChanged,
+  WorkerWorktreeAssigned,
   WorkerHeartbeat,
   AttemptStarted,
   ModelResolved,

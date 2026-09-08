@@ -14,6 +14,7 @@ import { JobExecutorSession } from "@opencode-ai/core/job/executor-session"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
 import { JobScheduler } from "@opencode-ai/core/job/scheduler"
 import { JobStore } from "@opencode-ai/core/job/store"
+import { JobWorktree } from "@opencode-ai/core/job/worktree"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
@@ -44,6 +45,7 @@ const applicationServices = LayerNode.group([
   // The session-backed executor replaces the unconfigured default, so a worker
   // admitted here actually runs.
   JobExecutorSession.node,
+  JobWorktree.node,
   JobScheduler.node,
   JobScheduler.daemonNode,
   PermissionSaved.node,

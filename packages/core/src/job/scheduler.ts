@@ -10,6 +10,7 @@ import { JobExecutor } from "./executor"
 import { JobRecovery } from "./recovery"
 import { JobRetry } from "./retry"
 import { JobStore } from "./store"
+import { JobWorktree } from "./worktree"
 
 /**
  * Runs queued workers.
@@ -49,6 +50,7 @@ const layer = (limits: JobAdmission.Limits) =>
       const jobs = yield* JobV2.Service
       const recovery = yield* JobRecovery.Service
       const executor = yield* JobExecutor.Service
+      const worktrees = yield* JobWorktree.Service
       const workers = yield* FiberSet.make<void>()
       // Assigned once `tick` exists below. A finished worker wakes the loop
       // through this so its slot is taken now rather than at the next tick;
@@ -122,6 +124,17 @@ const layer = (limits: JobAdmission.Limits) =>
         readonly job: Job.Info
         readonly worker: Job.Worker
       }) {
+        // Provisioned on admission rather than on creation: a worker that never
+        // runs should leave no checkout behind. A worker that already holds one
+        // keeps it, so a retry resumes in the tree its previous attempt used.
+        if (input.worker.worktree === undefined) {
+          const worktree = yield* worktrees.provision({
+            job: input.job,
+            workerID: input.worker.id,
+            role: input.worker.role,
+          })
+          if (worktree) yield* jobs.assignWorktree({ workerID: input.worker.id, worktree })
+        }
         yield* jobs.workerStatus({ workerID: input.worker.id, to: "running" })
         yield* jobs.heartbeat({ workerID: input.worker.id, leaseMs: LEASE_MS })
         const attempt = yield* jobs.startAttempt({
@@ -213,7 +226,7 @@ const layer = (limits: JobAdmission.Limits) =>
 export const node = makeGlobalNode({
   service: Service,
   layer: layer(JobAdmission.defaultLimits),
-  deps: [JobStore.node, JobV2.node, JobRecovery.node, JobExecutor.node],
+  deps: [JobStore.node, JobV2.node, JobRecovery.node, JobExecutor.node, JobWorktree.node],
 })
 
 /** Test seam: a scheduler with limits of the caller's choosing. */
@@ -221,7 +234,7 @@ export const nodeWith = (limits: JobAdmission.Limits) =>
   makeGlobalNode({
     service: Service,
     layer: layer(limits),
-    deps: [JobStore.node, JobV2.node, JobRecovery.node, JobExecutor.node],
+    deps: [JobStore.node, JobV2.node, JobRecovery.node, JobExecutor.node, JobWorktree.node],
   })
 
 /**

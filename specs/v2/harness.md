@@ -62,8 +62,9 @@ new aggregates and projections over infrastructure that is already tested.
 - [x] Retry policy, crash recovery, admission control and budget enforcement
 - [x] Scheduler loop with a rolling pool, and attempts run as sessions
 - [x] Capability monotonicity: a child's permissions clamped against its parent's
+- [x] A writing worker gets its own worktree; readers share the checkout
 - [ ] Enforcing a worker's clamped ruleset inside its session
-- [ ] Worktrees and sandbox
+- [ ] Sandbox backends
 - [ ] Deterministic verifier
 - [ ] Everything below
 

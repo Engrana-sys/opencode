@@ -186,6 +186,15 @@ const layer = Layer.effectDiscard(
         .pipe(Effect.orDie),
     )
 
+    yield* events.project(JobEvent.WorkerWorktreeAssigned, (event) =>
+      db
+        .update(JobWorkerTable)
+        .set({ worktree: event.data.worktree, time_updated: millis(event.data.timestamp) })
+        .where(eq(JobWorkerTable.id, event.data.workerID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+
     yield* events.project(JobEvent.WorkerHeartbeat, (event) =>
       db
         .update(JobWorkerTable)
