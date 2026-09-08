@@ -57,6 +57,10 @@ new aggregates and projections over infrastructure that is already tested.
 - [x] Durable loops, fixed-interval and self-paced
 - [x] Goal, loop and todos as Context Sources that survive compaction
 - [x] Per-role system model chains with fallthrough
+- [x] Job aggregate on the ledger, with projections proved replayable by test
+- [x] Worker and Attempt kept apart, with requested and resolved models
+- [x] Retry policy, crash recovery, admission control and budget enforcement
+- [ ] The scheduler loop and the executor that runs an attempt
 - [ ] Everything below
 
 ## P0

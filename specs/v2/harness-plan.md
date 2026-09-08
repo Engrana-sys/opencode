@@ -90,11 +90,21 @@ ledger reproduces them exactly.
 **Verify.** Unit tests over transitions (legal ones succeed, illegal ones fail),
 plus a replay test that truncates projections, replays, and diffs the result.
 
-## Phase 2 — Background fleet
+## Phase 2 — Background fleet *(in progress)*
 
 **Deliverable.** A scheduler that runs workers in parallel under limits, with a
 rolling pool, retry with backoff and jitter, timeouts, cancellation, heartbeats,
 leases, and a startup recovery scan.
+
+**Landed.** The deterministic halves, each pure and tested without a provider:
+`job/retry.ts` (what is worth retrying and when), `job/recovery.ts` (reclaiming
+work whose lease lapsed), `job/admission.ts` (which queued workers fit the
+limits), `job/budget.ts` (whether a job may keep spending).
+
+**Remaining.** The loop that joins them, and the executor that gives an attempt a
+session, a model and its permissions. That half is not deterministic: it is where
+the fleet meets the runner, and it needs decisions about how a worker obtains its
+session and inherits permissions.
 
 **Anchors.** `SessionRunCoordinator` already serialises per key and coalesces
 wakeups. `EventSequenceTable.owner_id` already carries aggregate ownership — the
