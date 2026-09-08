@@ -1,6 +1,7 @@
 export * as Job from "./job"
 
 import { Schema } from "effect"
+import { Permission } from "./permission"
 import { ascending, descending } from "./identifier"
 import { DateTimeUtcFromMillis, NonNegativeInt, optional, PositiveInt, statics } from "./schema"
 import { SessionID } from "./session-id"
@@ -249,6 +250,12 @@ export const Worker = Schema.Struct({
    * be applied before an attempt exists.
    */
   requested: ModelRef,
+  /**
+   * The worker's effective permissions, already clamped against its parent's.
+   * Stored resolved rather than computed at each check, so what a worker was
+   * allowed to do stays readable after the fact.
+   */
+  permissions: Permission.Ruleset,
   status: WorkerStatus,
   worktree: optional(Worktree),
   /** Set while an attempt holds the worker; a lapsed lease is how recovery finds the dead. */

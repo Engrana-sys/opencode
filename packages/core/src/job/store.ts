@@ -76,6 +76,7 @@ const workerFromRow = (row: typeof JobWorkerTable.$inferSelect): Job.Worker => (
     modelID: row.requested_model,
     ...(row.requested_variant === null ? {} : { variant: row.requested_variant }),
   },
+  permissions: row.permissions,
   status: row.status,
   ...(row.worktree === null ? {} : { worktree: row.worktree }),
   ...(row.heartbeat_at === null ? {} : { heartbeatAt: DateTime.makeUnsafe(row.heartbeat_at) }),

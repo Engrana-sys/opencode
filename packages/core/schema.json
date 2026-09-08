@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "d9399280-4853-4b4d-bf4e-53f807aa06ff",
+  "id": "b72fe1e1-c0c6-460b-857d-bdc34de8b932",
   "prevIds": [
-    "85e433a2-a958-4967-b6fe-6d8594baef91"
+    "d9399280-4853-4b4d-bf4e-53f807aa06ff"
   ],
   "ddl": [
     {
@@ -1307,6 +1307,16 @@
       "default": null,
       "generated": null,
       "name": "requested_variant",
+      "entityType": "columns",
+      "table": "job_worker"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "permissions",
       "entityType": "columns",
       "table": "job_worker"
     },

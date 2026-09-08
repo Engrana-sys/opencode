@@ -25,12 +25,18 @@ import { JobExecutor } from "./executor"
  * to use Codestral that silently ran on something else makes every later
  * comparison between them meaningless.
  *
- * ## Known gap until phase 4
+ * ## Permissions
  *
- * The worker runs with the permissions of its agent, not the intersection of
- * its parent's effective permissions with its own. Capability monotonicity is
- * phase 4 work and is not enforced here. Until it lands, a child worker can
- * reach whatever its agent allows, which may be more than its parent had.
+ * The worker carries a ruleset already clamped against its parent's, computed
+ * when it was created. Capability monotonicity is therefore settled before an
+ * attempt starts rather than negotiated here.
+ *
+ * What remains open is the last hop: the session runtime resolves permissions
+ * from the agent, so the clamped ruleset is recorded on the worker and readable
+ * afterwards, but a session does not yet accept an explicit ruleset to run
+ * under. Until it does, a child whose agent is more permissive than its parent
+ * is denied on paper and permitted in practice. That hop is tracked as
+ * remaining phase 4 work and is not papered over here.
  *
  * @module
  */

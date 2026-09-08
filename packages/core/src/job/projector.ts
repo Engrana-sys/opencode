@@ -147,6 +147,7 @@ const layer = Layer.effectDiscard(
           requested_provider: event.data.requested.providerID,
           requested_model: event.data.requested.modelID,
           requested_variant: event.data.requested.variant ?? null,
+          permissions: event.data.permissions,
           status: "created",
           worktree: event.data.worktree ?? null,
           time_created: millis(event.data.timestamp),

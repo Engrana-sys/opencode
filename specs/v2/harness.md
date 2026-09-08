@@ -60,7 +60,11 @@ new aggregates and projections over infrastructure that is already tested.
 - [x] Job aggregate on the ledger, with projections proved replayable by test
 - [x] Worker and Attempt kept apart, with requested and resolved models
 - [x] Retry policy, crash recovery, admission control and budget enforcement
-- [ ] The scheduler loop and the executor that runs an attempt
+- [x] Scheduler loop with a rolling pool, and attempts run as sessions
+- [x] Capability monotonicity: a child's permissions clamped against its parent's
+- [ ] Enforcing a worker's clamped ruleset inside its session
+- [ ] Worktrees and sandbox
+- [ ] Deterministic verifier
 - [ ] Everything below
 
 ## P0

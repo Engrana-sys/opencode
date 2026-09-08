@@ -183,6 +183,7 @@ export default {
           \`requested_provider\` text NOT NULL,
           \`requested_model\` text NOT NULL,
           \`requested_variant\` text,
+          \`permissions\` text NOT NULL,
           \`status\` text NOT NULL,
           \`worktree\` text,
           \`heartbeat_at\` integer,

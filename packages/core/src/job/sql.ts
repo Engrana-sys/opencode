@@ -3,6 +3,7 @@ import { Timestamps } from "../database/schema.sql"
 import { ProjectTable } from "../project/sql"
 import { ProjectV2 } from "../project"
 import type { Job } from "@opencode-ai/schema/job"
+import type { Permission } from "@opencode-ai/schema/permission"
 import type { SessionSchema } from "../session/schema"
 import * as DatabasePath from "../database/path"
 
@@ -82,6 +83,7 @@ export const JobWorkerTable = sqliteTable(
     requested_provider: text().notNull(),
     requested_model: text().notNull(),
     requested_variant: text(),
+    permissions: text({ mode: "json" }).$type<Permission.Ruleset>().notNull(),
     status: text().$type<Job.WorkerStatus>().notNull(),
     worktree: text({ mode: "json" }).$type<Job.Worktree>(),
     heartbeat_at: integer(),

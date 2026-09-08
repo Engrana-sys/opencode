@@ -4,8 +4,10 @@ import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Job } from "@opencode-ai/schema/job"
 import { JobEvent } from "@opencode-ai/schema/job-event"
 import { makeGlobalNode } from "./effect/app-node"
+import { Capability } from "./permission/capability"
 import { EventV2 } from "./event"
 import { JobStore } from "./job/store"
+import type { Permission } from "@opencode-ai/schema/permission"
 import type { ProjectV2 } from "./project"
 import type { SessionSchema } from "./session/schema"
 
@@ -120,6 +122,12 @@ export interface Interface {
     readonly agent: string
     /** The model this worker is spawned to use; concurrency limits read it before any attempt exists. */
     readonly requested: Job.ModelRef
+    /**
+     * What this worker's agent asks for. It is clamped against the parent's
+     * effective set before being stored, so asking for more than the parent
+     * holds grants nothing.
+     */
+    readonly permissions?: Permission.Ruleset
     readonly stepID?: Job.StepID
     readonly parentID?: Job.WorkerID
     readonly worktree?: Job.Worktree
@@ -295,6 +303,12 @@ const layer = Layer.effect(
         role: input.role,
         agent: input.agent,
         requested: input.requested,
+        // Clamped here rather than at the call site. An invariant that depends
+        // on every caller remembering it is not an invariant.
+        permissions: Capability.clamp({
+          parent: parent?.permissions ?? [],
+          child: input.permissions ?? [],
+        }),
         ...(input.stepID === undefined ? {} : { stepID: input.stepID }),
         ...(input.parentID === undefined ? {} : { parentID: input.parentID }),
         ...(input.worktree === undefined ? {} : { worktree: input.worktree }),

@@ -3,6 +3,7 @@ export * as JobEvent from "./job-event"
 import { Schema } from "effect"
 import { Event } from "./event"
 import { Job } from "./job"
+import { Permission } from "./permission"
 import { DateTimeUtcFromMillis, NonNegativeInt, optional, PositiveInt } from "./schema"
 import { SessionID } from "./session-id"
 
@@ -91,6 +92,8 @@ export const WorkerCreated = Event.define({
     role: Schema.String,
     agent: Schema.String,
     requested: Job.ModelRef,
+    /** Already clamped against the parent's; the event records what was granted. */
+    permissions: Permission.Ruleset,
     worktree: optional(Job.Worktree),
   },
 })
