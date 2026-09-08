@@ -243,11 +243,19 @@ export const Worker = Schema.Struct({
   depth: NonNegativeInt,
   role: Schema.String.annotate({ description: "What this worker is for, such as scout-backend or auditor" }),
   agent: Schema.String,
+  /**
+   * The model this worker was spawned to use. Held on the worker, not only on
+   * its attempts, because concurrency limits per provider and per model have to
+   * be applied before an attempt exists.
+   */
+  requested: ModelRef,
   status: WorkerStatus,
   worktree: optional(Worktree),
   /** Set while an attempt holds the worker; a lapsed lease is how recovery finds the dead. */
   heartbeatAt: optional(DateTimeUtcFromMillis),
   leaseUntil: optional(DateTimeUtcFromMillis),
+  /** Set on a requeued worker: the backoff before its next attempt may start. */
+  retryAfter: optional(DateTimeUtcFromMillis),
   usage: Usage,
   timeCreated: DateTimeUtcFromMillis,
   timeCompleted: optional(DateTimeUtcFromMillis),

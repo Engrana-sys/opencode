@@ -144,6 +144,9 @@ const layer = Layer.effectDiscard(
           depth: event.data.depth,
           role: event.data.role,
           agent: event.data.agent,
+          requested_provider: event.data.requested.providerID,
+          requested_model: event.data.requested.modelID,
+          requested_variant: event.data.requested.variant ?? null,
           status: "created",
           worktree: event.data.worktree ?? null,
           time_created: millis(event.data.timestamp),
@@ -166,6 +169,14 @@ const layer = Layer.effectDiscard(
             ? // A settled worker holds no lease; leaving one would make recovery
               // rediscover work that is already finished.
               { time_completed: millis(event.data.timestamp), lease_until: null }
+            : {}),
+          // A worker leaving `running` releases its lease even when it is going
+          // back to the queue, and carries its backoff with it.
+          ...(event.data.to === "queued"
+            ? {
+                lease_until: null,
+                retry_after: event.data.retryAfter === undefined ? null : millis(event.data.retryAfter),
+              }
             : {}),
           time_updated: millis(event.data.timestamp),
         })

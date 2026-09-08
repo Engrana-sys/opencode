@@ -90,6 +90,7 @@ export const WorkerCreated = Event.define({
     depth: NonNegativeInt,
     role: Schema.String,
     agent: Schema.String,
+    requested: Job.ModelRef,
     worktree: optional(Job.Worktree),
   },
 })
@@ -103,6 +104,12 @@ export const WorkerStatusChanged = Event.define({
     from: Job.WorkerStatus,
     to: Job.WorkerStatus,
     reason: optional(Schema.String),
+    /**
+     * Earliest this worker may be admitted again. Carried on the event so a
+     * retry's backoff is durable: a process that restarts mid-wait still honours
+     * it, instead of retrying the moment it comes back.
+     */
+    retryAfter: optional(DateTimeUtcFromMillis),
   },
 })
 

@@ -10,7 +10,9 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionLoopScheduler } from "@opencode-ai/core/session/loop-scheduler"
 import { JobV2 } from "@opencode-ai/core/job"
 import { JobProjector } from "@opencode-ai/core/job/projector"
+import { JobExecutor } from "@opencode-ai/core/job/executor"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
+import { JobScheduler } from "@opencode-ai/core/job/scheduler"
 import { JobStore } from "@opencode-ai/core/job/store"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
@@ -39,6 +41,9 @@ const applicationServices = LayerNode.group([
   JobStore.node,
   JobV2.node,
   JobRecovery.node,
+  JobExecutor.node,
+  JobScheduler.node,
+  JobScheduler.daemonNode,
   PermissionSaved.node,
   PtyTicket.node,
   Credential.node,

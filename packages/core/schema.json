@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "dfd05fee-b256-4eae-a0e8-a0b7b29aa067",
+  "id": "d9399280-4853-4b4d-bf4e-53f807aa06ff",
   "prevIds": [
-    "8c4e1f9b-05c0-4439-b442-57dd27624c6b"
+    "85e433a2-a958-4967-b6fe-6d8594baef91"
   ],
   "ddl": [
     {
@@ -1286,6 +1286,36 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "requested_provider",
+      "entityType": "columns",
+      "table": "job_worker"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "requested_model",
+      "entityType": "columns",
+      "table": "job_worker"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "requested_variant",
+      "entityType": "columns",
+      "table": "job_worker"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "status",
       "entityType": "columns",
       "table": "job_worker"
@@ -1317,6 +1347,16 @@
       "default": null,
       "generated": null,
       "name": "lease_until",
+      "entityType": "columns",
+      "table": "job_worker"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "retry_after",
       "entityType": "columns",
       "table": "job_worker"
     },
@@ -3245,6 +3285,24 @@
       "where": null,
       "origin": "manual",
       "name": "job_worker_lease_idx",
+      "entityType": "indexes",
+      "table": "job_worker"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "requested_provider",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "job_worker_queue_idx",
       "entityType": "indexes",
       "table": "job_worker"
     },

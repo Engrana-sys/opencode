@@ -79,10 +79,14 @@ export const JobWorkerTable = sqliteTable(
     depth: integer().notNull(),
     role: text().notNull(),
     agent: text().notNull(),
+    requested_provider: text().notNull(),
+    requested_model: text().notNull(),
+    requested_variant: text(),
     status: text().$type<Job.WorkerStatus>().notNull(),
     worktree: text({ mode: "json" }).$type<Job.Worktree>(),
     heartbeat_at: integer(),
     lease_until: integer(),
+    retry_after: integer(),
     tokens_input: integer().notNull().default(0),
     tokens_output: integer().notNull().default(0),
     tokens_cached: integer().notNull().default(0),
@@ -95,6 +99,7 @@ export const JobWorkerTable = sqliteTable(
     index("job_worker_parent_idx").on(table.parent_id),
     // Recovery scans live workers by lease expiry; keep that a range scan.
     index("job_worker_lease_idx").on(table.status, table.lease_until),
+    index("job_worker_queue_idx").on(table.status, table.requested_provider),
   ],
 )
 

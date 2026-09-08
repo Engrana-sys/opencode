@@ -49,6 +49,8 @@ const newJob = Effect.fn("test.newJob")(function* () {
   })
 })
 
+const model = (providerID: string, modelID: string): Job.ModelRef => ({ providerID, modelID })
+
 const worktree: Job.Worktree = {
   repo: "/project",
   baseRef: "dev",
@@ -123,7 +125,7 @@ describe("JobRecovery", () => {
       const store = yield* JobStore.Service
       const recovery = yield* JobRecovery.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
       const attempt = yield* jobs.startAttempt({
         workerID: worker.id,
@@ -150,7 +152,7 @@ describe("JobRecovery", () => {
       const jobs = yield* JobV2.Service
       const recovery = yield* JobRecovery.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "fixer", agent: "fixer", worktree })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "fixer", agent: "fixer", requested: model("mistral", "codestral"), worktree })
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
       yield* jobs.startAttempt({ workerID: worker.id, requested: { providerID: "mistral", modelID: "codestral" } })
 
@@ -168,12 +170,44 @@ describe("JobRecovery", () => {
       const store = yield* JobStore.Service
       const recovery = yield* JobRecovery.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
       yield* jobs.heartbeat({ workerID: worker.id, leaseMs: 60_000 })
 
       expect(yield* recovery.scan()).toHaveLength(0)
       expect((yield* store.worker(worker.id))?.status).toBe("running")
+    }),
+  )
+
+  it.effect("leaves queued and waiting work alone", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      const waiting = yield* jobs.createWorker({
+        jobID: job.id,
+        role: "scout",
+        agent: "scout",
+        requested: model("mistral", "codestral"),
+      })
+      yield* jobs.workerStatus({ workerID: waiting.id, to: "queued" })
+      const asking = yield* jobs.createWorker({
+        jobID: job.id,
+        role: "fixer",
+        agent: "fixer",
+        requested: model("mistral", "codestral"),
+      })
+      yield* jobs.workerStatus({ workerID: asking.id, to: "running" })
+      yield* jobs.heartbeat({ workerID: asking.id, leaseMs: 60_000 })
+      yield* jobs.workerStatus({ workerID: asking.id, to: "waiting_input" })
+
+      // Neither is executing anything a dying process could abandon: one is
+      // waiting for a slot, the other for a person who may answer tomorrow.
+      expect(yield* recovery.scan()).toHaveLength(0)
+      expect((yield* store.worker(waiting.id))?.status).toBe("queued")
+      expect((yield* store.worker(asking.id))?.status).toBe("waiting_input")
     }),
   )
 
@@ -183,11 +217,11 @@ describe("JobRecovery", () => {
       const jobs = yield* JobV2.Service
       const recovery = yield* JobRecovery.Service
       const job = yield* newJob()
-      const done = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout" })
+      const done = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: done.id, to: "running" })
       yield* jobs.workerStatus({ workerID: done.id, to: "completed" })
 
-      const dead = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor" })
+      const dead = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: dead.id, to: "running" })
 
       expect((yield* recovery.scan()).map((outcome) => outcome.workerID)).toEqual([dead.id])

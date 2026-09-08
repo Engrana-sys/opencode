@@ -71,10 +71,16 @@ const workerFromRow = (row: typeof JobWorkerTable.$inferSelect): Job.Worker => (
   depth: row.depth,
   role: row.role,
   agent: row.agent,
+  requested: {
+    providerID: row.requested_provider,
+    modelID: row.requested_model,
+    ...(row.requested_variant === null ? {} : { variant: row.requested_variant }),
+  },
   status: row.status,
   ...(row.worktree === null ? {} : { worktree: row.worktree }),
   ...(row.heartbeat_at === null ? {} : { heartbeatAt: DateTime.makeUnsafe(row.heartbeat_at) }),
   ...(row.lease_until === null ? {} : { leaseUntil: DateTime.makeUnsafe(row.lease_until) }),
+  ...(row.retry_after === null ? {} : { retryAfter: DateTime.makeUnsafe(row.retry_after) }),
   usage: usage(row),
   timeCreated: DateTime.makeUnsafe(row.time_created),
   ...(row.time_completed === null ? {} : { timeCompleted: DateTime.makeUnsafe(row.time_completed) }),
@@ -157,8 +163,16 @@ const LIVE: ReadonlyArray<Job.Status> = [
   "reviewing",
 ]
 
-/** Worker statuses that claim to be doing something and so must hold a lease. */
-const LIVE_WORKERS: ReadonlyArray<Job.WorkerStatus> = ["queued", "running", "waiting_input"]
+/**
+ * Only a running worker must hold a lease.
+ *
+ * A queued worker is waiting for a slot and a `waiting_input` one is waiting for
+ * a person; neither is executing anything a dying process could abandon, and
+ * neither should be reclaimed for going quiet. Including them would let recovery
+ * kill work that was never started, and would put a two-minute lease on a human
+ * who might answer tomorrow.
+ */
+const LIVE_WORKERS: ReadonlyArray<Job.WorkerStatus> = ["running"]
 
 const DEFAULT_LIMIT = 50
 

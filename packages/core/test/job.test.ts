@@ -118,7 +118,7 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const store = yield* JobStore.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout-backend", agent: "scout" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout-backend", agent: "scout", requested: model("mistral", "codestral") })
 
       const first = yield* jobs.startAttempt({ workerID: worker.id, requested: model("mistral", "codestral") })
       yield* jobs.settleAttempt({
@@ -159,7 +159,7 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const store = yield* JobStore.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
 
       for (const cost of [0.01, 0.02]) {
         const attempt = yield* jobs.startAttempt({ workerID: worker.id, requested: model("mistral", "codestral") })
@@ -189,7 +189,7 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const store = yield* JobStore.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor", requested: model("mistral", "codestral") })
       const attempt = yield* jobs.startAttempt({ workerID: worker.id, requested: model("mistral", "codestral") })
 
       yield* jobs.resolveModel({
@@ -221,20 +221,21 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const job = yield* newJob()
 
-      let parent = yield* jobs.createWorker({ jobID: job.id, role: "planner", agent: "planner" })
+      let parent = yield* jobs.createWorker({ jobID: job.id, role: "planner", agent: "planner", requested: model("mistral", "codestral") })
       expect(parent.depth).toBe(0)
       for (let depth = 1; depth <= JobV2.MAX_DEPTH; depth++) {
         parent = yield* jobs.createWorker({
           jobID: job.id,
           role: `level-${depth}`,
           agent: "scout",
+          requested: model("mistral", "codestral"),
           parentID: parent.id,
         })
         expect(parent.depth).toBe(depth)
       }
 
       const failure = yield* jobs
-        .createWorker({ jobID: job.id, role: "too-deep", agent: "scout", parentID: parent.id })
+        .createWorker({ jobID: job.id, role: "too-deep", agent: "scout", requested: model("mistral", "codestral"), parentID: parent.id })
         .pipe(Effect.flip)
       expect(failure._tag).toBe("Job.TreeLimitError")
     }),
@@ -246,7 +247,7 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const store = yield* JobStore.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
 
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
       yield* jobs.heartbeat({ workerID: worker.id, leaseMs: 60_000 })
@@ -267,7 +268,7 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const store = yield* JobStore.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
 
       // Never heartbeated: the process died between creation and its first lease.
@@ -284,7 +285,7 @@ describe("Job", () => {
       const jobs = yield* JobV2.Service
       const store = yield* JobStore.Service
       const job = yield* newJob()
-      const worker = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor" })
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor", requested: model("mistral", "codestral") })
 
       yield* jobs.addArtifact({
         jobID: job.id,
@@ -325,6 +326,7 @@ describe("Job projections", () => {
         jobID: job.id,
         role: "scout-backend",
         agent: "scout",
+        requested: model("mistral", "codestral"),
         stepID: step.id,
       })
       const attempt = yield* jobs.startAttempt({ workerID: worker.id, requested: model("mistral", "codestral") })

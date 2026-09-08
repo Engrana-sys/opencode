@@ -118,6 +118,8 @@ export interface Interface {
     readonly jobID: Job.ID
     readonly role: string
     readonly agent: string
+    /** The model this worker is spawned to use; concurrency limits read it before any attempt exists. */
+    readonly requested: Job.ModelRef
     readonly stepID?: Job.StepID
     readonly parentID?: Job.WorkerID
     readonly worktree?: Job.Worktree
@@ -127,6 +129,8 @@ export interface Interface {
     readonly workerID: Job.WorkerID
     readonly to: Job.WorkerStatus
     readonly reason?: string
+    /** Backoff before a requeued worker may be admitted again. */
+    readonly retryAfterMs?: number
   }) => Effect.Effect<void, WorkerNotFoundError>
 
   /** Renews a worker's lease. Silence here is what recovery reads as abandonment. */
@@ -290,6 +294,7 @@ const layer = Layer.effect(
         depth,
         role: input.role,
         agent: input.agent,
+        requested: input.requested,
         ...(input.stepID === undefined ? {} : { stepID: input.stepID }),
         ...(input.parentID === undefined ? {} : { parentID: input.parentID }),
         ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
@@ -300,13 +305,17 @@ const layer = Layer.effect(
     const workerStatus: Interface["workerStatus"] = Effect.fn("Job.workerStatus")(function* (input) {
       const worker = yield* requireWorker(input.workerID)
       if (worker.status === input.to) return
+      const now = yield* DateTime.now
       yield* events.publish(JobEvent.WorkerStatusChanged, {
         jobID: worker.jobID,
-        timestamp: yield* DateTime.now,
+        timestamp: now,
         workerID: input.workerID,
         from: worker.status,
         to: input.to,
         ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.retryAfterMs === undefined
+          ? {}
+          : { retryAfter: DateTime.addDuration(now, input.retryAfterMs) }),
       })
     })
 
