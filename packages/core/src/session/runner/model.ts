@@ -73,12 +73,26 @@ export type Error =
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
+  /** Resolves one catalog model by identity, for work that must not use the session's model. */
+  readonly resolveNamed: (input: {
+    readonly providerID: ProviderV2.ID
+    readonly modelID: ModelV2.ID
+  }) => Effect.Effect<Model, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionRunnerModel") {}
 
 /** Test or embedding seam for supplying a model resolver directly. */
-export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+export const layerWith = (resolve: Interface["resolve"], resolveNamed?: Interface["resolveNamed"]) =>
+  Layer.succeed(
+    Service,
+    Service.of({
+      resolve,
+      resolveNamed:
+        resolveNamed ??
+        ((input) => new ModelUnavailableError({ providerID: input.providerID, modelID: input.modelID })),
+    }),
+  )
 
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
   if (credential?.type === "key") return Auth.value(credential.key)
@@ -207,6 +221,20 @@ export const locationLayer = Layer.effect(
         )
         return yield* resolve(
           session,
+          selected,
+          connection ? yield* integrations.connection.resolve(connection) : undefined,
+        )
+      }),
+      resolveNamed: Effect.fn("SessionRunnerModel.resolveNamed")(function* (input) {
+        const selected = (yield* catalog.model.available()).find(
+          (model) => model.providerID === input.providerID && model.id === input.modelID,
+        )
+        if (!selected) return yield* new ModelUnavailableError({ providerID: input.providerID, modelID: input.modelID })
+        const provider = yield* catalog.provider.get(selected.providerID)
+        const connection = yield* integrations.connection.active(
+          provider?.integrationID ?? Integration.ID.make(selected.providerID),
+        )
+        return yield* fromCatalogModel(
           selected,
           connection ? yield* integrations.connection.resolve(connection) : undefined,
         )

@@ -26,9 +26,14 @@ import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
+import { SessionGoal } from "../goal"
+import { SessionGoalEvaluator } from "../goal-evaluator"
+import { SessionGuidance } from "../guidance"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
+import { Prompt } from "../prompt"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service } from "./index"
@@ -103,6 +108,9 @@ const layer = Layer.effect(
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const referenceGuidance = yield* ReferenceGuidance.Service
+    const sessionGuidance = yield* SessionGuidance.Service
+    const goals = yield* SessionGoal.Service
+    const goalEvaluator = yield* SessionGoalEvaluator.Service
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
@@ -165,10 +173,16 @@ const layer = Layer.effect(
     const continueAfterOverflowCompaction = (step: number) =>
       new TurnTransitionError({ _tag: "ContinueAfterOverflowCompaction", step })
 
-    const loadSystemContext = (agent: AgentV2.Selection) =>
-      Effect.all([systemContext.load(), skillGuidance.load(agent), referenceGuidance.load()], {
-        concurrency: "unbounded",
-      }).pipe(Effect.map(SystemContext.combine))
+    const loadSystemContext = (agent: AgentV2.Selection, sessionID: SessionSchema.ID) =>
+      Effect.all(
+        [
+          systemContext.load(),
+          skillGuidance.load(agent),
+          referenceGuidance.load(),
+          sessionGuidance.load(sessionID),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map(SystemContext.combine))
 
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
@@ -180,7 +194,7 @@ const layer = Layer.effect(
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
+      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent, session.id), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
@@ -195,7 +209,7 @@ const layer = Layer.effect(
         if (promoted > 0) currentStep = 1
       }
       const system =
-        initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
+        initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent, session.id), session.id))
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
@@ -387,6 +401,43 @@ const layer = Layer.effect(
       )
     })
 
+    /**
+     * Decides whether an otherwise-idle Session keeps working on its goal.
+     *
+     * This runs only at a real resting point, once no user input remains
+     * pending, so an active goal never jumps ahead of what the user asked for.
+     * A judge that cannot run stops the Session rather than looping blind.
+     */
+    const continueForGoal = Effect.fn("SessionRunner.continueForGoal")(function* (sessionID: SessionSchema.ID) {
+      const goal = yield* goals.get(sessionID)
+      if (goal === undefined || goal.status !== "active") return false
+      const session = yield* getSession(sessionID)
+      const verdict = yield* goalEvaluator.evaluate({
+        condition: goal.condition,
+        entries: yield* getContext(sessionID),
+        fallback: yield* models.resolve(session),
+      })
+      if (!verdict.evaluated) {
+        yield* goals.settle({ sessionID, status: "exhausted", verdict: verdict.reason })
+        return false
+      }
+      const recorded = yield* goals.record({ sessionID, met: verdict.met, verdict: verdict.reason })
+      if (recorded === undefined || recorded.status !== "active") return false
+      yield* SessionInput.admit(db, events, {
+        id: SessionMessage.ID.create(),
+        sessionID,
+        prompt: Prompt.fromUserMessage({
+          text: [
+            "The goal is not met yet.",
+            `Evaluator verdict: ${verdict.reason}`,
+            `Continue working toward it. This is continuation ${recorded.iterations} of ${recorded.budget}.`,
+          ].join("\n\n"),
+        }),
+        delivery: "queue",
+      })
+      return true
+    })
+
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
@@ -408,6 +459,7 @@ const layer = Layer.effect(
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
         }
         shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+        if (!shouldRun) shouldRun = yield* continueForGoal(input.sessionID)
         promotion = shouldRun ? "queue" : undefined
       }
     })
@@ -428,6 +480,9 @@ export const node = makeLocationNode({
     ToolRegistry.node,
     SessionRunnerModel.node,
     SessionStore.node,
+    SessionGuidance.node,
+    SessionGoal.node,
+    SessionGoalEvaluator.node,
     Location.node,
     SystemContextRegistry.node,
     SkillGuidance.node,

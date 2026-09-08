@@ -14,6 +14,8 @@ import { Timestamps } from "../database/schema.sql"
 import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
 import type { Revert } from "@opencode-ai/schema/revert"
+import type { SessionGoal } from "@opencode-ai/schema/session-goal"
+import type { SessionLoop } from "@opencode-ai/schema/session-loop"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -115,6 +117,33 @@ export const TodoTable = sqliteTable(
     index("todo_session_idx").on(table.session_id),
   ],
 )
+
+export const GoalTable = sqliteTable("session_goal", {
+  session_id: text()
+    .$type<SessionSchema.ID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  condition: text().notNull(),
+  status: text().$type<SessionGoal.Status>().notNull(),
+  iterations: integer().notNull(),
+  budget: integer().notNull(),
+  verdict: text(),
+  ...Timestamps,
+})
+
+export const LoopTable = sqliteTable("session_loop", {
+  session_id: text()
+    .$type<SessionSchema.ID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  prompt: text().notNull(),
+  interval: integer(),
+  iterations: integer().notNull(),
+  budget: integer().notNull(),
+  status: text().$type<SessionLoop.Status>().notNull(),
+  next_run: integer(),
+  ...Timestamps,
+})
 
 export const SessionMessageTable = sqliteTable(
   "session_message",

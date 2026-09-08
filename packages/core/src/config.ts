@@ -13,6 +13,9 @@ import { AbsolutePath } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
 import { ConfigCompaction } from "./config/compaction"
+import { ConfigGoal } from "./config/goal"
+import { ConfigLoop } from "./config/loop"
+import { ConfigSystemModel } from "./config/system-model"
 import { ConfigCommand } from "./config/command"
 import { ConfigExperimental } from "./config/experimental"
 import { ConfigFormatter } from "./config/formatter"
@@ -86,6 +89,16 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  goal: ConfigGoal.Info.pipe(Schema.optional).annotate({
+    description: "Persistent goal evaluation behavior",
+  }),
+  system_models: ConfigSystemModel.Info.pipe(Schema.optional).annotate({
+    description:
+      "Ordered model chains for OpenCode's own internal work, keyed by role such as goal_evaluator. Each role falls through its chain until a model answers, so one provider outage does not disable the feature",
+  }),
+  loop: ConfigLoop.Info.pipe(Schema.optional).annotate({
+    description: "Recurring loop behavior",
   }),
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",

@@ -27,6 +27,11 @@ import { ReferenceGuidance } from "./reference/guidance"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionTodo } from "./session/todo"
+import { SessionGoal } from "./session/goal"
+import { SessionLoop } from "./session/loop"
+import { SessionGuidance } from "./session/guidance"
+import { SessionGoalEvaluator } from "./session/goal-evaluator"
+import { SessionSystemModel } from "./session/system-model"
 import { SkillV2 } from "./skill"
 import { SkillGuidance } from "./skill/guidance"
 import { Snapshot } from "./snapshot"
@@ -70,6 +75,11 @@ export const locationServices = LayerNode.group([
   SkillGuidance.node,
   ReferenceGuidance.node,
   SessionTodo.node,
+  SessionGoal.node,
+  SessionLoop.node,
+  SessionGuidance.node,
+  SessionSystemModel.node,
+  SessionGoalEvaluator.node,
   QuestionV2.node,
   ReadToolFileSystem.node,
   BuiltInTools.node,
