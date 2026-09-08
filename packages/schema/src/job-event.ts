@@ -180,6 +180,7 @@ export const ArtifactAdded = Event.define({
   },
 })
 
+/** Every job event is durable; the ledger is the only record a job has. */
 export const Definitions = Event.inventory(
   Created,
   StatusChanged,
@@ -194,3 +195,5 @@ export const Definitions = Event.inventory(
   AttemptSettled,
   ArtifactAdded,
 )
+
+export const DurableDefinitions = Definitions
