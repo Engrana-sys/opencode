@@ -22,6 +22,7 @@ import { QuestionV1 } from "./question-v1"
 import { Reference } from "./reference"
 import { ServerEvent } from "./server-event"
 import { SessionCompactionEvent } from "./session-compaction-event"
+import { JobEvent } from "./job-event"
 import { SessionEvent } from "./session-event"
 import { SessionGoal } from "./session-goal"
 import { SessionLoop } from "./session-loop"
@@ -60,6 +61,7 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...JobEvent.Definitions,
   ...SessionGoal.Event.Definitions,
   ...SessionLoop.Event.Definitions,
 )
@@ -70,6 +72,7 @@ export const Definitions = Event.inventory(
   ...InstallationEvent.Definitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...JobEvent.Definitions,
   ...SessionGoal.Event.Definitions,
   ...SessionLoop.Event.Definitions,
   ...LspEvent.Definitions,
