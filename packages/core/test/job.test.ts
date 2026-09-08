@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { asc } from "drizzle-orm"
-import { Effect } from "effect"
+import { DateTime, Duration, Effect } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { Job } from "@opencode-ai/schema/job"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -83,6 +84,31 @@ describe("Job", () => {
       expect(settled.timeCompleted).toBeDefined()
       // A settled job holds no stage: there is no work in progress to label.
       expect(settled.stage).toBeUndefined()
+    }),
+  )
+
+  it.effect("keeps the start time of the first run when work resumes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const job = yield* newJob()
+
+      yield* jobs.transition({ jobID: job.id, to: "queued" })
+      const first = yield* jobs.transition({ jobID: job.id, to: "running" })
+      expect(first.timeStarted).toBeDefined()
+
+      // `running` is re-enterable from five states. If each entry rewrote the
+      // start time, a job bouncing through `blocked` would renew its
+      // wall-clock budget on every pass and never expire.
+      yield* TestClock.adjust(Duration.minutes(5))
+      yield* jobs.transition({ jobID: job.id, to: "blocked" })
+      const resumed = yield* jobs.transition({ jobID: job.id, to: "running" })
+
+      expect(resumed.timeStarted).toEqual(first.timeStarted)
+      // And the clock really did move, so the assertion above is not vacuous:
+      // the elapsed time the budget reads is still measured from the first run.
+      const elapsed = DateTime.toEpochMillis(yield* DateTime.now) - DateTime.toEpochMillis(resumed.timeStarted!)
+      expect(elapsed).toBeGreaterThanOrEqual(Duration.toMillis(Duration.minutes(5)))
     }),
   )
 

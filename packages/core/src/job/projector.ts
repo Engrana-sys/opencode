@@ -78,8 +78,14 @@ const layer = Layer.effectDiscard(
         .set({
           status: event.data.to,
           stage: event.data.stage ?? null,
-          // First entry into a working state is when the job actually started.
-          ...(event.data.to === "running" ? { time_started: millis(event.data.timestamp) } : {}),
+          // The *first* entry into a working state is when the job started, and
+          // COALESCE is what makes that true: `running` is re-enterable from
+          // five states, and rewriting this on each pass would hand a job that
+          // bounces through `blocked` a fresh wall-clock budget every time.
+          // It also keeps the handler idempotent under replay.
+          ...(event.data.to === "running"
+            ? { time_started: sql`coalesce(${JobTable.time_started}, ${millis(event.data.timestamp)})` }
+            : {}),
           time_updated: millis(event.data.timestamp),
         })
         .where(eq(JobTable.id, event.data.jobID))
