@@ -10,7 +10,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionLoopScheduler } from "@opencode-ai/core/session/loop-scheduler"
 import { JobV2 } from "@opencode-ai/core/job"
 import { JobProjector } from "@opencode-ai/core/job/projector"
-import { JobExecutor } from "@opencode-ai/core/job/executor"
+import { JobExecutorSession } from "@opencode-ai/core/job/executor-session"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
 import { JobScheduler } from "@opencode-ai/core/job/scheduler"
 import { JobStore } from "@opencode-ai/core/job/store"
@@ -41,7 +41,9 @@ const applicationServices = LayerNode.group([
   JobStore.node,
   JobV2.node,
   JobRecovery.node,
-  JobExecutor.node,
+  // The session-backed executor replaces the unconfigured default, so a worker
+  // admitted here actually runs.
+  JobExecutorSession.node,
   JobScheduler.node,
   JobScheduler.daemonNode,
   PermissionSaved.node,
