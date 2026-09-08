@@ -64,8 +64,10 @@ new aggregates and projections over infrastructure that is already tested.
 - [x] Capability monotonicity: a child's permissions clamped against its parent's
 - [x] A writing worker gets its own worktree; readers share the checkout
 - [ ] Enforcing a worker's clamped ruleset inside its session
+- [x] Deterministic verifier with verified / refuted / unverified verdicts
 - [ ] Sandbox backends
-- [ ] Deterministic verifier
+- [ ] Workflow engine and human gates
+- [ ] Jobs TUI and public API
 - [ ] Everything below
 
 ## P0

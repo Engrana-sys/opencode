@@ -14,6 +14,7 @@ import { JobExecutorSession } from "@opencode-ai/core/job/executor-session"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
 import { JobScheduler } from "@opencode-ai/core/job/scheduler"
 import { JobStore } from "@opencode-ai/core/job/store"
+import { JobVerifier } from "@opencode-ai/core/job/verifier"
 import { JobWorktree } from "@opencode-ai/core/job/worktree"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
@@ -46,6 +47,7 @@ const applicationServices = LayerNode.group([
   // admitted here actually runs.
   JobExecutorSession.node,
   JobWorktree.node,
+  JobVerifier.node,
   JobScheduler.node,
   JobScheduler.daemonNode,
   PermissionSaved.node,

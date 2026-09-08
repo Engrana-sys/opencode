@@ -3,6 +3,7 @@ export * as JobEvent from "./job-event"
 import { Schema } from "effect"
 import { Event } from "./event"
 import { Job } from "./job"
+import { JobVerification } from "./job-verification"
 import { Permission } from "./permission"
 import { DateTimeUtcFromMillis, NonNegativeInt, optional, PositiveInt } from "./schema"
 import { SessionID } from "./session-id"
@@ -187,6 +188,25 @@ export const AttemptSettled = Event.define({
   },
 })
 
+/**
+ * A candidate was checked.
+ *
+ * In the ledger because a verdict is a fact about the job, not a value returned
+ * to whoever asked: someone reading the timeline later must be able to see what
+ * was checked and what it said, without re-running anything.
+ */
+export const Verified = Event.define({
+  type: "job.verified",
+  ...options,
+  schema: {
+    ...Base,
+    workerID: optional(Job.WorkerID),
+    stepID: optional(Job.StepID),
+    verdict: JobVerification.Verdict,
+    results: Schema.Array(JobVerification.Result),
+  },
+})
+
 export const ArtifactAdded = Event.define({
   type: "job.artifact.added",
   ...options,
@@ -218,6 +238,7 @@ export const Definitions = Event.inventory(
   AttemptStarted,
   ModelResolved,
   AttemptSettled,
+  Verified,
   ArtifactAdded,
 )
 

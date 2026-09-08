@@ -7,6 +7,7 @@ import { makeGlobalNode } from "./effect/app-node"
 import { Capability } from "./permission/capability"
 import { EventV2 } from "./event"
 import { JobStore } from "./job/store"
+import type { JobVerification } from "@opencode-ai/schema/job-verification"
 import type { Permission } from "@opencode-ai/schema/permission"
 import type { ProjectV2 } from "./project"
 import type { SessionSchema } from "./session/schema"
@@ -180,6 +181,15 @@ export interface Interface {
     readonly usage?: Job.Usage
     readonly error?: string
   }) => Effect.Effect<void, WorkerNotFoundError>
+
+  /** Records a verdict in the ledger, so what was checked stays readable later. */
+  readonly recordVerification: (input: {
+    readonly jobID: Job.ID
+    readonly verdict: JobVerification.Verdict
+    readonly results: ReadonlyArray<JobVerification.Result>
+    readonly workerID?: Job.WorkerID
+    readonly stepID?: Job.StepID
+  }) => Effect.Effect<void, JobNotFoundError>
 
   readonly addArtifact: (input: {
     readonly jobID: Job.ID
@@ -408,6 +418,20 @@ const layer = Layer.effect(
       })
     })
 
+    const recordVerification: Interface["recordVerification"] = Effect.fn("Job.recordVerification")(function* (
+      input,
+    ) {
+      yield* require(input.jobID)
+      yield* events.publish(JobEvent.Verified, {
+        jobID: input.jobID,
+        timestamp: yield* DateTime.now,
+        verdict: input.verdict,
+        results: input.results,
+        ...(input.workerID === undefined ? {} : { workerID: input.workerID }),
+        ...(input.stepID === undefined ? {} : { stepID: input.stepID }),
+      })
+    })
+
     const addArtifact: Interface["addArtifact"] = Effect.fn("Job.addArtifact")(function* (input) {
       yield* require(input.jobID)
       const artifactID = Job.ArtifactID.create()
@@ -442,6 +466,7 @@ const layer = Layer.effect(
       startAttempt,
       resolveModel,
       settleAttempt,
+      recordVerification,
       addArtifact,
     })
   }),
