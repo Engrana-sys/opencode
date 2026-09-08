@@ -119,12 +119,12 @@ projections are rebuilt from it.
 cd packages/core && bun test
 ```
 
-Expect **`1209 pass / 2 fail`**. The two failures are
+Expect **`1211 pass / 2 fail`**. The two failures are
 `util.flock > fails clearly on unwritable lock roots` and
 `util.effect-flock > fails on unwritable lock roots`. They fail **only when the
 suite runs as root**, because the test creates an unwritable directory and
 expects a permission error — and root can write anywhere. Running as an ordinary
-user, all 1211 pass.
+user, all 1213 pass.
 
 Type checking, from the repo root:
 

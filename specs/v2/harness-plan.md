@@ -43,10 +43,16 @@ written so a test can fail on it.
    workflow's grant. Widening requires explicit human approval.
 6. **A worker writing to disk owns a worktree.** Read-only workers share the base
    checkout. Two writing workers never share a directory.
-7. **Every live worker holds a lease.** A worker with no valid lease is not
-   running, whatever its status column says. Recovery trusts the lease.
+7. **Every live worker holds a lease, from the moment it is live.** The
+   transition into `running` grants the lease; the heartbeat only renews it. An
+   invariant that holds everywhere except between two durable writes is not an
+   invariant — and that gap is precisely where a recovery scan reclaims work
+   that is starting. A worker with no valid lease is not running, whatever its
+   status column says. Recovery trusts the lease.
 8. **Budgets are enforced, not advisory.** Exhausting a budget settles the work;
-   it does not log and continue.
+   it does not log and continue. Elapsed time is measured from the first entry
+   into a working state, never re-stamped on a later one: a re-enterable status
+   that resets the clock makes a wall-clock budget unreachable.
 9. **Ordinary OpenCode keeps working.** Sessions without a job behave exactly as
    before at every phase boundary.
 
@@ -90,21 +96,19 @@ ledger reproduces them exactly.
 **Verify.** Unit tests over transitions (legal ones succeed, illegal ones fail),
 plus a replay test that truncates projections, replays, and diffs the result.
 
-## Phase 2 — Background fleet *(in progress)*
+## Phase 2 — Background fleet *(landed)*
 
 **Deliverable.** A scheduler that runs workers in parallel under limits, with a
 rolling pool, retry with backoff and jitter, timeouts, cancellation, heartbeats,
 leases, and a startup recovery scan.
 
-**Landed.** The deterministic halves, each pure and tested without a provider:
+**Landed.** The deterministic halves, each pure and tested without a provider —
 `job/retry.ts` (what is worth retrying and when), `job/recovery.ts` (reclaiming
 work whose lease lapsed), `job/admission.ts` (which queued workers fit the
-limits), `job/budget.ts` (whether a job may keep spending).
-
-**Remaining.** The loop that joins them, and the executor that gives an attempt a
-session, a model and its permissions. That half is not deterministic: it is where
-the fleet meets the runner, and it needs decisions about how a worker obtains its
-session and inherits permissions.
+limits), `job/budget.ts` (whether a job may keep spending) — and the halves that
+join them: `job/scheduler.ts` (the tick, the rolling pool, leases and
+heartbeats), `job/executor.ts` and `job/executor-session.ts` (giving an attempt
+a session, a model and its permissions).
 
 **Anchors.** `SessionRunCoordinator` already serialises per key and coalesces
 wakeups. `EventSequenceTable.owner_id` already carries aggregate ownership — the

@@ -82,7 +82,10 @@ Each tick, in this order — and the order is the design:
 1. **Recovery** settles abandoned work, so its slots are free before anything new
    is admitted.
 2. **Budgets** are enforced, so an exhausted job cannot admit more work on its
-   way out.
+   way out. The wall-clock budget runs from the job's **first** entry into
+   `running`, not its most recent: `running` is re-enterable from five states,
+   and re-stamping the start time would hand a job that bounces through
+   `blocked` a fresh budget on every pass.
 3. **Admission** decides which queued workers fit.
 
 Limits apply globally and per project, provider and model. A candidate that does
@@ -114,9 +117,17 @@ A crash leaves rows saying `running` with nothing running. The status column
 cannot be trusted for this, because the process that would have corrected it is
 the one that died. **The lease can**, because it expires on its own.
 
-So a running worker holds a lease, renewed by heartbeat inside the attempt's own
-scope: when the attempt ends the scope closes and the heartbeat stops with it. A
-lease can never outlive the work it vouches for.
+So a running worker holds a lease. **The transition into `running` grants it**,
+and the heartbeat only renews it — because those are two separate durable
+writes, and a lease granted by the first heartbeat would leave a gap where the
+row reads `running` with no lease at all. That gap is exactly what recovery
+treats as abandoned, so a scan landing inside it would declare stale a worker
+whose executor had just started.
+
+The heartbeat runs inside the attempt's own scope: when the attempt ends the
+scope closes and the heartbeat stops with it. A lease can never outlive the work
+it vouches for. What makes a worker abandoned is therefore that **nothing
+renewed** its lease, not that it never had one.
 
 Queued and `waiting_input` workers hold no lease. Neither is executing anything a
 dying process could abandon — one waits for a slot, the other for a person who

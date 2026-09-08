@@ -78,3 +78,26 @@ and several already do.
 | `/goal` and `/loop` as native slash commands | Not started — they work as tools the model calls |
 
 Where a gap exists it is written into the module it affects, not only here.
+
+## What has been independently reviewed
+
+Worth stating plainly, because it is a property of the code that nothing else
+records: **most of the harness was written in one session by one author, and its
+tests were written by that same author.** Tests like that share the author's
+blind spots — a passing suite proves the code does what its author believed it
+should, which is a weaker claim than it looks.
+
+| Area | Review state |
+| --- | --- |
+| `job/projector.ts` — the wall-clock start time | Reviewed independently; a defect was found and fixed |
+| `job/projector.ts`, `job/store.ts` — the lease window | Reviewed independently; a defect was found and fixed |
+| Everything else in the harness | **Not independently reviewed** |
+
+Both fixed defects were the same shape: a comment describing an invariant the
+code did not implement. The start time was re-stamped on every entry into
+`running` though its comment said "first"; the lease was granted one durable
+write after the status that required it. Neither showed up in the suite, because
+the tests encoded the same assumption as the code.
+
+A wider audit — seven areas, four lenses each, adversarially verified — is
+planned but has not yet completed a run.
