@@ -325,7 +325,15 @@ describe("Job", () => {
       const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
 
-      // Never heartbeated: the process died between creation and its first lease.
+      // Entering `running` grants the first lease, so the worker is not
+      // abandoned merely for not having heartbeated yet. Were it otherwise,
+      // recovery would reclaim every worker in the gap between the transition
+      // and its first heartbeat — two separate durable writes.
+      expect((yield* store.worker(worker.id))?.leaseUntil).toBeDefined()
+      expect(yield* store.expired()).toHaveLength(0)
+
+      // Nothing renewed it: the process died mid-attempt.
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
       expect((yield* store.expired()).map((item) => item.id)).toEqual([worker.id])
 
       yield* jobs.heartbeat({ workerID: worker.id, leaseMs: 60_000 })

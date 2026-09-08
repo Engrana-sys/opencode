@@ -185,6 +185,14 @@ const layer = Layer.effectDiscard(
                 retry_after: event.data.retryAfter === undefined ? null : millis(event.data.retryAfter),
               }
             : {}),
+          // The lease is granted by the transition itself, not by the first
+          // heartbeat. Those are two separate durable writes, and in the gap
+          // between them the row reads `running` with no lease — which is
+          // exactly what `JobStore.expired` treats as abandoned. Recovery would
+          // then declare stale a worker whose executor had just started.
+          ...(event.data.to === "running"
+            ? { lease_until: millis(event.data.timestamp) + Job.LEASE_MS, retry_after: null }
+            : {}),
           time_updated: millis(event.data.timestamp),
         })
         .where(eq(JobWorkerTable.id, event.data.workerID))

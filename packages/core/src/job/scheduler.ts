@@ -30,8 +30,11 @@ import { JobWorktree } from "./worktree"
 
 /** The periodic tick is a safety net; finishing work wakes the loop directly. */
 const TICK = "5 seconds"
-/** Long enough to survive a slow provider turn, short enough that a crash is noticed. */
-export const LEASE_MS = 120_000
+/**
+ * Re-exported from the schema, where the projection also reads it: the first
+ * lease is granted by the `running` transition, so the two must agree.
+ */
+export const LEASE_MS = Job.LEASE_MS
 export const HEARTBEAT_MS = 30_000
 
 export interface Interface {
@@ -135,8 +138,10 @@ const layer = (limits: JobAdmission.Limits) =>
           })
           if (worktree) yield* jobs.assignWorktree({ workerID: input.worker.id, worktree })
         }
+        // The transition grants the first lease; the heartbeat below only
+        // renews it, so there is no window where this worker reads `running`
+        // with no lease and recovery can reclaim it out from under us.
         yield* jobs.workerStatus({ workerID: input.worker.id, to: "running" })
-        yield* jobs.heartbeat({ workerID: input.worker.id, leaseMs: LEASE_MS })
         const attempt = yield* jobs.startAttempt({
           workerID: input.worker.id,
           requested: input.worker.requested,

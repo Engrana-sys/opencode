@@ -117,6 +117,16 @@ export const WorkerStatus = Schema.Literals([
 ]).annotate({ identifier: "Job.WorkerStatus" })
 export type WorkerStatus = typeof WorkerStatus.Type
 
+/**
+ * How long a worker's lease is good for.
+ *
+ * Long enough to survive a slow provider turn, short enough that a crash is
+ * noticed. It lives here rather than in the scheduler because the projection
+ * grants the first lease at the moment a worker enters `running`, and a
+ * projection must not depend on the thing that runs the work.
+ */
+export const LEASE_MS = 120_000
+
 export const AttemptStatus = Schema.Literals(["running", "completed", "failed", "cancelled", "stale"]).annotate({
   identifier: "Job.AttemptStatus",
 })

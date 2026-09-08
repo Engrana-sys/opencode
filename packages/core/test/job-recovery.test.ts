@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { Job } from "@opencode-ai/schema/job"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -131,6 +132,9 @@ describe("JobRecovery", () => {
         workerID: worker.id,
         requested: { providerID: "mistral", modelID: "codestral" },
       })
+      // The transition granted a lease; what makes this worker abandoned is
+      // that nothing renewed it, not that it never had one.
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
 
       const outcomes = yield* recovery.scan()
       expect(outcomes).toHaveLength(1)
@@ -155,11 +159,32 @@ describe("JobRecovery", () => {
       const worker = yield* jobs.createWorker({ jobID: job.id, role: "fixer", agent: "fixer", requested: model("mistral", "codestral"), worktree })
       yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
       yield* jobs.startAttempt({ workerID: worker.id, requested: { providerID: "mistral", modelID: "codestral" } })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
 
       const outcomes = yield* recovery.scan()
       // Re-running over a half-applied diff compounds the mess.
       expect(outcomes[0].disposition).toBe("needs_review")
       expect(outcomes[0].reason).toContain(worktree.directory)
+    }),
+  )
+
+  it.effect("does not reclaim a worker in the gap before its first heartbeat", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+
+      // The scheduler transitions a worker to `running` and only then starts
+      // its heartbeat — two separate durable writes. A tick landing between
+      // them must not find an abandoned worker, because the executor that owns
+      // this one is starting right now.
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+
+      expect(yield* recovery.scan()).toHaveLength(0)
+      expect((yield* store.worker(worker.id))?.status).toBe("running")
     }),
   )
 
@@ -223,6 +248,7 @@ describe("JobRecovery", () => {
 
       const dead = yield* jobs.createWorker({ jobID: job.id, role: "auditor", agent: "auditor", requested: model("mistral", "codestral") })
       yield* jobs.workerStatus({ workerID: dead.id, to: "running" })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
 
       expect((yield* recovery.scan()).map((outcome) => outcome.workerID)).toEqual([dead.id])
       // A second pass finds nothing: the first one settled everything it saw.
