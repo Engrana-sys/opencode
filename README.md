@@ -1,129 +1,137 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+# OpenCode durable harness
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
+This repository is a fork of [OpenCode](https://github.com/sst/opencode) focused
+on making long-running agent work durable, inspectable, and recoverable.
+OpenCode remains the foundation and its documentation applies to the existing
+CLI, desktop application, providers, and configuration. This README describes
+what is different in the fork.
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+> [!IMPORTANT]
+> The fork is under active development. Persistent goals and loops work in
+> ordinary sessions today. The job runtime is implemented and tested in the
+> core, but no production UI or API creates jobs yet.
 
----
+## Why this fork exists
 
-### Installation
+A conversation is a useful interface, but it is not a durable unit of work.
+Long tasks need an objective that survives compaction, an execution history that
+survives process failure, isolated workers, explicit budgets, and verification
+that does not depend on the model grading its own answer.
 
-```bash
-# YOLO
-curl -fsSL https://opencode.ai/install | bash
+The architecture keeps those concerns separate:
 
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
-```
+> **Session ≠ Job ≠ Worker ≠ Attempt ≠ Model.**
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+- A **session** is a conversation with an agent.
+- A **job** is durable work with an objective and a permanent history.
+- A **worker** performs one role within a job.
+- An **attempt** records one concrete run of a worker.
+- A **model** is selected per invocation and remains replaceable.
 
-### Desktop App (BETA)
+## What works today
 
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
+### Durable sessions
 
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
+- **Persistent goals** keep a stopping condition in durable context and use an
+  independent evaluator to decide whether the session should continue.
+- **Durable loops** admit scheduled prompts without holding an in-memory timer,
+  so overdue work resumes after a restart.
+- **Compaction-proof context** restores goals, loops, and todos verbatim at each
+  context epoch instead of trusting a progressively summarized copy.
+- **System-model chains** let infrastructure calls fall through an ordered list
+  of models when a provider is unavailable or returns an unusable result.
 
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
-```
+Goals and loops are currently model-callable tools, not native `/goal` and
+`/loop` TUI commands. See [Goals, loops and system models](docs/goals-and-loops.md)
+for usage and configuration.
 
-#### Installation Directory
+### Durable jobs
 
-The install script respects the following priority order for the installation path:
+The core job subsystem now provides:
 
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
+- an append-only event ledger and replayable job projections;
+- explicit steps, workers, attempts, artifacts, and requested/resolved models;
+- a rolling scheduler with global, project, provider, and model admission limits;
+- durable retry backoff, lease-based crash recovery, and budget enforcement;
+- per-worker git worktrees for roles that may write;
+- monotonic permission clamping across a worker tree;
+- session-backed worker attempts; and
+- deterministic command and file verification with `verified`, `refuted`, and
+  `unverified` outcomes.
+
+The job runtime is not a user-facing feature yet. Sandbox backends, workflows,
+human approval gates, context and memory, the jobs TUI, and a public jobs API
+remain to be built. Capability clamping is computed and persisted, but is not
+yet enforced inside the worker session. Nothing currently creates jobs through
+a production path.
+
+Read [Jobs](docs/jobs.md) for the implemented model and its constraints. The
+[harness architecture](specs/v2/harness.md) and
+[phased implementation plan](specs/v2/harness-plan.md) describe the target and
+the invariants used to evaluate each phase.
+
+## Install and run the fork
+
+The upstream installer and package-manager releases install upstream OpenCode,
+not this fork. To run the durable harness, build it from this repository.
+
+Requirements: Git and the Bun version pinned in [`package.json`](package.json).
 
 ```bash
-# Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+git clone https://github.com/Engrana-sys/opencode
+cd opencode
+bun install
+bun run dev
 ```
 
-### Agents
+`bun run dev` starts the CLI directly from TypeScript. To produce a binary:
 
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
+```bash
+bun run --cwd packages/opencode build
+```
 
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
+See [Installing this fork on Linux](docs/install-linux.md) for distribution
+packages, state locations, verification steps, provider setup, and upstream
+merge guidance.
 
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
+## Documentation
 
-Learn more about [agents](https://opencode.ai/docs/agents).
+| Start here | Purpose |
+| --- | --- |
+| [Fork documentation](docs/README.md) | Status, reading order, and an honest feature matrix |
+| [Installation](docs/install-linux.md) | Build and run from source on Debian and Arch-based systems |
+| [Goals and loops](docs/goals-and-loops.md) | Use the session features available today |
+| [Jobs](docs/jobs.md) | Understand the durable job runtime already implemented in core |
+| [Harness architecture](specs/v2/harness.md) | Review the target architecture and remaining backlog |
+| [Harness plan](specs/v2/harness-plan.md) | Follow implementation phases and testable invariants |
 
-### Documentation
+For all unchanged OpenCode functionality, use the
+[upstream documentation](https://opencode.ai/docs).
 
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
+## Current status
 
-### Contributing
+| Area | State |
+| --- | --- |
+| Persistent goals, loops, and compaction-proof context | Working |
+| System-model chains with fallthrough | Working |
+| Job ledger and replayable projections | Working |
+| Scheduler, admission limits, retries, leases, and budgets | Working |
+| Session-backed attempts and per-worker worktrees | Working |
+| Deterministic verifier | Working |
+| Capability clamping | Persisted, not yet enforced by worker sessions |
+| Sandbox backends, workflows, and human gates | Not started |
+| Jobs TUI and public API | Not started |
+| Production job creation | Not started |
 
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
+## Contributing
 
-### Building on OpenCode
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change. This fork tracks
+OpenCode's `dev` branch; keep fork-specific behavior documented separately from
+upstream behavior and preserve the durable-job invariants in the harness plan.
 
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+## Upstream attribution
 
----
-
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+This project is based on the open-source
+[OpenCode](https://github.com/sst/opencode) coding agent. The durable harness and
+the documentation linked above are fork-specific and are not part of upstream
+OpenCode.
