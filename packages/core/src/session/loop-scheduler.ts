@@ -40,19 +40,26 @@ const scheduler = Layer.effectDiscard(
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
 
-    const admit = Effect.fn("SessionLoopScheduler.admit")(function* (sessionID: SessionSchema.ID, prompt: string) {
+    const admit = Effect.fn("SessionLoopScheduler.admit")(function* (row: typeof LoopTable.$inferSelect) {
+      const sessionID = SessionSchema.ID.make(row.session_id)
       const session = yield* store.get(sessionID)
       if (!session) return
+      // The iteration is charged before the prompt is queued: admitting first
+      // and failing to record leaves a loop running against a budget it never
+      // spends, while a recorded iteration that failed to queue costs one turn.
+      const iterated = yield* Effect.gen(function* () {
+        const loops = yield* SessionLoop.Service
+        return yield* loops.iterate({ sessionID })
+      }).pipe(Effect.provide(locations.get(session.location)))
+      // A loop stopped or replaced since the claim spent nothing, and the work
+      // it would queue is work the user has already called off.
+      if (iterated?.iterations !== row.iterations + 1) return
       yield* SessionInput.admit(db, events, {
         id: SessionMessage.ID.create(),
         sessionID,
-        prompt: Prompt.fromUserMessage({ text: prompt }),
+        prompt: Prompt.fromUserMessage({ text: row.prompt }),
         delivery: "queue",
       })
-      yield* Effect.gen(function* () {
-        const loops = yield* SessionLoop.Service
-        yield* loops.iterate({ sessionID })
-      }).pipe(Effect.provide(locations.get(session.location)))
       yield* execution.wake(sessionID)
     })
 
@@ -71,9 +78,11 @@ const scheduler = Layer.effectDiscard(
         .pipe(Effect.orDie)
       for (const row of due) {
         // One session's failure must not stop the others from iterating.
-        yield* admit(SessionSchema.ID.make(row.session_id), row.prompt).pipe(
-          Effect.catchCause((cause) => Effect.logWarning(`Loop iteration failed for ${row.session_id}`, cause)),
-        )
+        yield* Effect.gen(function* () {
+          // Whoever takes the row runs the iteration; every other ticker, here
+          // or in another opencode server on this machine, leaves it alone.
+          if (yield* SessionLoop.claim(db, row)) yield* admit(row)
+        }).pipe(Effect.catchCause((cause) => Effect.logWarning(`Loop iteration failed for ${row.session_id}`, cause)))
       }
     })
 

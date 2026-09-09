@@ -2,7 +2,8 @@ export * as JobExecutor from "./executor"
 
 import { Context, Effect, Layer } from "effect"
 import type { Job } from "@opencode-ai/schema/job"
-import { makeGlobalNode } from "../effect/app-node"
+import { Node } from "../effect/app-node"
+import { LayerNode } from "../effect/layer-node"
 import type { SessionSchema } from "../session/schema"
 
 /**
@@ -46,12 +47,12 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 export const layerWith = (run: Interface["run"]) => Layer.succeed(Service, Service.of({ run }))
 
 /**
- * The default when nothing real is installed.
+ * What a graph installs when it wants a scheduler but no model.
  *
  * It fails rather than pretending to work, and it fails with
  * `infrastructure_failure` rather than a reason that would look like the
- * worker's own fault. This keeps a server startable, and a scheduler
- * observable, before any executor exists.
+ * worker's own fault. This keeps a scheduler observable before any executor
+ * exists — but it has to be asked for, never inherited.
  */
 export const unconfigured = layerWith(() =>
   Effect.succeed({
@@ -61,4 +62,14 @@ export const unconfigured = layerWith(() =>
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer: unconfigured, deps: [] })
+/**
+ * Unbound: a graph installs its executor by replacing this node.
+ *
+ * A default bound here would be worse than none. The scheduler's dependencies
+ * are sealed when its own node compiles, so a second binding of this tag merged
+ * beside it in a group is never the one the scheduler calls: the real executor
+ * would sit in the runtime, unused, while every attempt failed
+ * `infrastructure_failure` and burned its retries in silence. Unbound, a graph
+ * that forgets to install one fails to build instead.
+ */
+export const node = LayerNode.unbound(Service, Node.tags.values.global)

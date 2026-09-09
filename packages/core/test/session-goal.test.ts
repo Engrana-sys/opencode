@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { DateTime, Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -10,6 +10,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionGoal } from "@opencode-ai/core/session/goal"
 import { SessionGoalEvaluator } from "@opencode-ai/core/session/goal-evaluator"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
@@ -135,9 +136,51 @@ describe("SessionGoalEvaluator.parseVerdict", () => {
     }),
   )
 
+  it.effect("ignores a judge that echoes the answer format before answering", () =>
+    Effect.sync(() => {
+      // The instructions themselves contain "VERDICT: MET or NOT_MET", so a
+      // restated format must not be read as the verdict.
+      expect(
+        SessionGoalEvaluator.parseVerdict(
+          "I will respond with VERDICT: MET or NOT_MET as required.\nVERDICT: NOT_MET\nREASON: tests still fail",
+        ),
+      ).toEqual({ evaluated: true, met: false, reason: "tests still fail" })
+    }),
+  )
+
   it.effect("defaults the reason when the model omits it", () =>
     Effect.sync(() => {
       expect(SessionGoalEvaluator.parseVerdict("VERDICT: MET")?.reason).toBe("No reason given.")
+    }),
+  )
+})
+
+describe("SessionGoalEvaluator.selectTranscript", () => {
+  const message = (text: string) =>
+    SessionMessage.User.make({
+      id: SessionMessage.ID.make("msg_transcript"),
+      type: "user",
+      text,
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+
+  it.effect("keeps the newest message even when it alone exceeds the budget", () =>
+    Effect.sync(() => {
+      // A single `write` call or a pasted log outgrows the whole budget; an
+      // empty transcript would read as no evidence and cost a continuation.
+      const transcript = SessionGoalEvaluator.selectTranscript([message("older work"), message("x".repeat(80_000))])
+      expect(transcript).toContain("xxx")
+      expect(transcript).not.toContain("older work")
+      expect(transcript.length).toBeLessThan(80_000)
+    }),
+  )
+
+  it.effect("still keeps whole messages when they fit", () =>
+    Effect.sync(() => {
+      expect(SessionGoalEvaluator.selectTranscript([message("first"), message("second")])).toBe(
+        "[User]: first\n\n[User]: second",
+      )
+      expect(SessionGoalEvaluator.selectTranscript([])).toBe("")
     }),
   )
 })

@@ -1,8 +1,10 @@
 import { describe, expect } from "bun:test"
-import { Duration, Effect } from "effect"
+import { eq } from "drizzle-orm"
+import { DateTime, Duration, Effect, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { Job } from "@opencode-ai/schema/job"
 import { Database } from "@opencode-ai/core/database/database"
+import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -10,24 +12,63 @@ import { JobV2 } from "@opencode-ai/core/job"
 import { JobProjector } from "@opencode-ai/core/job/projector"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
 import { JobRetry } from "@opencode-ai/core/job/retry"
+import { JobWorkerTable } from "@opencode-ai/core/job/sql"
 import { JobStore } from "@opencode-ai/core/job/store"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([
-      Database.node,
-      EventV2.node,
-      JobProjector.node,
-      JobStore.node,
-      JobV2.node,
-      JobRecovery.node,
-    ]),
-  ),
-)
+const graph = LayerNode.group([
+  Database.node,
+  EventV2.node,
+  JobProjector.node,
+  JobStore.node,
+  JobV2.node,
+  JobRecovery.node,
+])
+
+const it = testEffect(AppNodeBuilder.build(graph))
+
+/**
+ * A store whose snapshot is already out of date when it is returned.
+ *
+ * `expired` is a plain read that releases the database, and the writes recovery
+ * then makes each yield again, so a heartbeat from a worker that is very much
+ * alive can land in between. Renewing the lease inside the read reproduces that
+ * interleaving without racing two fibers.
+ */
+const renewing = makeGlobalNode({
+  service: JobStore.Service,
+  layer: Layer.effect(
+    JobStore.Service,
+    Effect.gen(function* () {
+      const store = yield* JobStore.Service
+      const { db } = yield* Database.Service
+      return JobStore.Service.of({
+        ...store,
+        expired: (now) =>
+          store.expired(now).pipe(
+            Effect.tap((workers) =>
+              Effect.gen(function* () {
+                const until = DateTime.toEpochMillis(yield* DateTime.now) + Job.LEASE_MS
+                for (const worker of workers)
+                  yield* db
+                    .update(JobWorkerTable)
+                    .set({ lease_until: until })
+                    .where(eq(JobWorkerTable.id, worker.id))
+                    .run()
+                    .pipe(Effect.orDie)
+              }),
+            ),
+          ),
+      })
+    }),
+  ).pipe(Layer.provide(JobStore.layer)),
+  deps: [Database.node, EventV2.node],
+})
+
+const itRenewing = testEffect(AppNodeBuilder.build(graph, [[JobStore.node, renewing]]))
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
@@ -340,6 +381,28 @@ describe("JobRecovery", () => {
       expect(yield* recovery.scan()).toHaveLength(0)
       expect((yield* store.worker(waiting.id))?.status).toBe("queued")
       expect((yield* store.worker(asking.id))?.status).toBe("waiting_input")
+    }),
+  )
+
+  itRenewing.effect("leaves a worker whose lease was renewed after the snapshot was taken", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      const attempt = yield* jobs.startAttempt({
+        workerID: worker.id,
+        requested: { providerID: "mistral", modelID: "codestral" },
+      })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
+
+      // Recovery trusts the lease, and the lease moved: this worker is alive.
+      expect(yield* recovery.scan()).toHaveLength(0)
+      expect((yield* store.worker(worker.id))?.status).toBe("running")
+      expect((yield* store.attempts(worker.id)).find((item) => item.id === attempt.id)?.status).toBe("running")
     }),
   )
 

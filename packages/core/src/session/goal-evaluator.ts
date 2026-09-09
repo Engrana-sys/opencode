@@ -47,17 +47,30 @@ export interface Verdict {
   readonly reason: string
 }
 
-const selectTranscript = (entries: ReadonlyArray<SessionMessage.Message>) => {
+/** Cuts a line to the budget proportionally; `Token.estimate` is linear in length. */
+const fit = (line: string) => {
+  const tokens = Token.estimate(line)
+  return tokens <= TRANSCRIPT_TOKENS ? line : line.slice(0, Math.floor((line.length * TRANSCRIPT_TOKENS) / tokens))
+}
+
+export const selectTranscript = (entries: ReadonlyArray<SessionMessage.Message>) => {
   const lines = entries.map(SessionCompaction.serialize).filter(Boolean)
+  if (lines.length === 0) return ""
   let total = 0
-  let split = lines.length
+  // The newest message is always kept, trimmed if it alone exceeds the budget:
+  // a message with a large tool input or a pasted log would otherwise leave an
+  // empty transcript, which the judge's own rules read as no evidence and so as
+  // NOT_MET — a continuation spent on work nobody looked at.
+  let split = lines.length - 1
   for (let index = lines.length - 1; index >= 0; index--) {
     const next = total + Token.estimate(lines[index])
     if (next > TRANSCRIPT_TOKENS) break
     total = next
     split = index
   }
-  return lines.slice(split).join("\n\n")
+  const kept = lines.slice(split)
+  if (kept.length === 1) kept[0] = fit(kept[0])
+  return kept.join("\n\n")
 }
 
 export const buildPrompt = (input: { readonly condition: string; readonly transcript: string }) =>
@@ -68,9 +81,14 @@ export const buildPrompt = (input: { readonly condition: string; readonly transc
   ].join("\n\n")
 
 export const parseVerdict = (text: string): Verdict | undefined => {
-  const verdict = /VERDICT:\s*(MET|NOT[_\s-]?MET)/i.exec(text)
+  // The format the instructions ask for, "VERDICT: MET or NOT_MET", is itself a
+  // match, so a judge that restates them before answering would be read as MET.
+  // Skipping that echo and taking the last verdict, with the reason that follows
+  // it, leaves the model's own answer.
+  const matches = [...text.matchAll(/VERDICT:\s*(MET|NOT[_\s-]?MET)(?!\s+or\b)/gi)]
+  const verdict = matches.at(-1)
   if (!verdict) return undefined
-  const reason = /REASON:\s*(.+)/i.exec(text)
+  const reason = /REASON:\s*(.+)/i.exec(text.slice(verdict.index))
   return {
     evaluated: true,
     met: !/NOT/i.test(verdict[1]),

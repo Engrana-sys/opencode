@@ -1,6 +1,18 @@
 import { describe, expect, it } from "bun:test"
+import { $ } from "bun"
+import fs from "fs/promises"
+import path from "path"
+import { Effect } from "effect"
 import { JobVerification } from "@opencode-ai/schema/job-verification"
+import { Job } from "@opencode-ai/schema/job"
 import { JobVerifier } from "@opencode-ai/core/job/verifier"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { git } from "./fixture/git"
+import { tmpdir } from "./fixture/tmpdir"
+import { testEffect } from "./lib/effect"
+
+const effect = testEffect(LayerNode.compile(JobVerifier.node))
+const jobID = Job.ID.make("job_08044e8ab001abcdefgh")
 
 const result = (
   name: string,
@@ -93,3 +105,128 @@ describe("JobVerifier.inspect", () => {
     expect(JobVerifier.inspect({ files: [], allow: ["packages/**"] }).ok).toBe(true)
   })
 })
+
+describe("JobVerifier files check", () => {
+  const paths = (input: { allow?: ReadonlyArray<string>; forbid?: ReadonlyArray<string> }): JobVerification.Check => ({
+    name: "paths",
+    type: "files",
+    ...input,
+  })
+
+  effect.live("sees both paths of a rename", () =>
+    withRepo(
+      (project) => git(project, "mv", "secrets.lock", "renamed.txt"),
+      (repo) =>
+        Effect.gen(function* () {
+          const verifier = yield* JobVerifier.Service
+          // Porcelain reports a rename as one line naming two paths. Read as a
+          // single path it is neither of them, and `git mv secrets.lock` walks
+          // past the rule that exists to stop exactly that.
+          const info = yield* verifier.verify({
+            checks: [paths({ forbid: ["*.lock"] })],
+            directory: repo.project,
+            jobID,
+          })
+          expect(info.verdict).toBe("refuted")
+          expect(info.results[0].detail).toContain("secrets.lock")
+        }),
+    ),
+  )
+
+  effect.live("looks inside a directory the worker created", () =>
+    withRepo(
+      async (project) => {
+        await fs.mkdir(path.join(project, "newdir/inner"), { recursive: true })
+        await fs.writeFile(path.join(project, "newdir/inner/.env"), "SECRET=1\n")
+      },
+      (repo) =>
+        Effect.gen(function* () {
+          const verifier = yield* JobVerifier.Service
+          // Git collapses an untracked directory to a single entry, so a worker
+          // that put its forbidden files one level down is judged on the name of
+          // the directory rather than on anything it wrote.
+          const info = yield* verifier.verify({
+            checks: [paths({ forbid: ["**/*.env"] })],
+            directory: repo.project,
+            jobID,
+          })
+          expect(info.verdict).toBe("refuted")
+          expect(info.results[0].detail).toContain("newdir/inner/.env")
+        }),
+    ),
+  )
+
+  effect.live("does not refute a permitted path because git quoted it", () =>
+    withRepo(
+      async (project) => {
+        await fs.writeFile(path.join(project, "src/with space.ts"), "two\n")
+        await fs.writeFile(path.join(project, "src/naïve.ts"), "two\n")
+      },
+      (repo) =>
+        Effect.gen(function* () {
+          const verifier = yield* JobVerifier.Service
+          // Git C-quotes a path holding a space or a non-ASCII byte. Kept, the
+          // quotes match no glob, and a worker that stayed inside its allowed
+          // subtree is reported for a violation that did not happen.
+          const info = yield* verifier.verify({
+            checks: [paths({ allow: ["src/**"] })],
+            directory: repo.project,
+            jobID,
+          })
+          expect(info.verdict).toBe("verified")
+        }),
+    ),
+  )
+
+  effect.live("sees work the worker committed", () =>
+    withRepo(
+      async (project) => {
+        await fs.mkdir(path.join(project, ".github/workflows"), { recursive: true })
+        await git(project, "mv", "src/a.ts", ".github/workflows/ci.yml")
+        await git(project, "commit", "-m", "work")
+      },
+      (repo) =>
+        Effect.gen(function* () {
+          const verifier = yield* JobVerifier.Service
+          // Committing is the normal end state for a worker that owns its tree,
+          // and it empties `git status`. Judged on the working tree alone the
+          // check reports nothing changed for a worker that changed everything
+          // it was forbidden to.
+          const info = yield* verifier.verify({
+            checks: [paths({ forbid: [".github/**"] })],
+            directory: repo.project,
+            base: repo.base,
+            jobID,
+          })
+          expect(info.verdict).toBe("refuted")
+          expect(info.results[0].detail).toContain(".github/workflows/ci.yml")
+        }),
+    ),
+  )
+})
+
+/** A repository with one commit, then whatever the worker did to it. */
+function withRepo<A, E, R>(
+  worker: (project: string) => Promise<unknown>,
+  body: (repo: { project: string; base: string }) => Effect.Effect<A, E, R>,
+) {
+  return Effect.acquireUseRelease(
+    Effect.promise(async () => {
+      const root = await tmpdir()
+      const project = path.join(root.path, "project")
+      await fs.mkdir(path.join(project, "src"), { recursive: true })
+      await git(project, "init")
+      await git(project, "config", "user.email", "test@example.com")
+      await git(project, "config", "user.name", "Test")
+      await fs.writeFile(path.join(project, "src/a.ts"), "one\n")
+      await fs.writeFile(path.join(project, "secrets.lock"), "one\n")
+      await git(project, "add", "-A")
+      await git(project, "commit", "-m", "root")
+      const base = (await $`git rev-parse HEAD`.cwd(project).text()).trim()
+      await worker(project)
+      return { root, repo: { project, base } }
+    }),
+    (input) => body(input.repo),
+    (input) => Effect.promise(() => input.root[Symbol.asyncDispose]()),
+  )
+}

@@ -33,29 +33,71 @@ const truncate = (value: string) =>
   value.length <= MAX_DETAIL ? value : `${value.slice(0, MAX_DETAIL)}\n[truncated]`
 
 /**
+ * Paths named by one `git status --porcelain=v1 -z` entry.
+ *
+ * A rename spans two NUL-terminated fields and both are paths the worker
+ * touched — the tree it moved a file out of is as much part of its blast radius
+ * as the one it moved it into. Reading the entry as a single path yields a
+ * string that is neither of them and matches no glob anyone would write.
+ */
+const entryPaths = (fields: ReadonlyArray<string>, index: number) => {
+  const entry = fields[index]
+  const renamed = entry[0] === "R" || entry[0] === "C" || entry[1] === "R" || entry[1] === "C"
+  const origin = renamed ? fields[index + 1] : undefined
+  return { paths: origin ? [entry.slice(3), origin] : [entry.slice(3)], next: origin ? index + 2 : index + 1 }
+}
+
+/**
  * Files a worker changed in its own tree, relative to the repository root.
  *
  * Undefined means the tree could not be read, which is different from a tree
  * with no changes: one is missing evidence, the other is evidence of nothing
  * having happened.
+ *
+ * `base` is the commit the worker started from, and without it only the working
+ * tree is visible: a worker that committed what it did — the normal end state
+ * for one that owns a worktree — leaves `git status` empty and would otherwise
+ * look like a worker that touched nothing at all.
  */
 export const changed = (input: {
   readonly git: Git.Interface
   readonly proc: AppProcess.Interface
   readonly directory: AbsolutePath
+  readonly base?: string
 }) =>
   Effect.gen(function* () {
     const repository = yield* input.git.repo.discover(input.directory)
     if (!repository) return undefined
-    const result = yield* input.proc
-      .run(ChildProcess.make("git", ["status", "--porcelain=v1"], { cwd: input.directory, stdin: "ignore" }))
-      .pipe(Effect.catch(() => Effect.succeed(undefined)))
-    if (!result || result.exitCode !== 0) return undefined
-    return result.stdout
-      .toString("utf8")
-      .split("\n")
-      .map((line) => line.slice(3).trim())
-      .filter(Boolean)
+    const run = (args: ReadonlyArray<string>) =>
+      input.proc
+        .run(ChildProcess.make("git", [...args], { cwd: input.directory, stdin: "ignore" }))
+        .pipe(Effect.catch(() => Effect.succeed(undefined)))
+    // -z because git C-quotes any path holding a space or a non-ASCII byte, and
+    // a quoted path matches neither the allow nor the forbid globs written for
+    // it. --untracked-files=all because the default collapses a new directory
+    // to one entry, hiding every forbidden file a worker put inside it.
+    const status = yield* run(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    if (!status || status.exitCode !== 0) return undefined
+    const fields = status.stdout.toString("utf8").split("\0")
+    const files = new Set<string>()
+    for (let index = 0; index < fields.length; ) {
+      if (!fields[index]) {
+        index++
+        continue
+      }
+      const entry = entryPaths(fields, index)
+      for (const file of entry.paths) files.add(file)
+      index = entry.next
+    }
+    if (input.base !== undefined) {
+      // --no-renames so a move lands as both of its paths rather than only the
+      // destination, for the reason `entryPaths` gives.
+      const diff = yield* run(["diff", "--name-only", "-z", "--no-renames", input.base, "--"])
+      // A base that cannot be diffed is missing evidence, not an empty diff.
+      if (!diff || diff.exitCode !== 0) return undefined
+      for (const file of diff.stdout.toString("utf8").split("\0")) if (file) files.add(file)
+    }
+    return [...files]
   })
 
 /**
@@ -91,6 +133,8 @@ export interface Interface {
   readonly verify: (input: {
     readonly checks: ReadonlyArray<JobVerification.Check>
     readonly directory: string
+    /** The commit the worker started from, so work it committed is still seen. */
+    readonly base?: string
     readonly jobID: Job.ID
     readonly workerID?: Job.WorkerID
   }) => Effect.Effect<JobVerification.Info>
@@ -144,8 +188,17 @@ const layer = Layer.effect(
       }
     })
 
-    const files = Effect.fn("JobVerifier.files")(function* (check: JobVerification.Check, directory: string) {
-      const list = yield* changed({ git, proc, directory: AbsolutePath.make(directory) })
+    const files = Effect.fn("JobVerifier.files")(function* (
+      check: JobVerification.Check,
+      directory: string,
+      base: string | undefined,
+    ) {
+      const list = yield* changed({
+        git,
+        proc,
+        directory: AbsolutePath.make(directory),
+        ...(base === undefined ? {} : { base }),
+      })
       if (list === undefined)
         return {
           name: check.name,
@@ -170,7 +223,7 @@ const layer = Layer.effect(
         for (const check of input.checks)
           results.push(
             check.type === "files"
-              ? yield* files(check, input.directory)
+              ? yield* files(check, input.directory, input.base)
               : yield* command(check, input.directory),
           )
         return {

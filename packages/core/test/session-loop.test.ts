@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { eq } from "drizzle-orm"
 import { DateTime, Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -9,7 +10,7 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionLoop } from "@opencode-ai/core/session/loop"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { LoopTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionLoop.node])))
@@ -132,6 +133,51 @@ describe("SessionLoop", () => {
       )
       // Rescheduling is not an iteration; it must not spend the budget.
       expect(rescheduled?.iterations).toBe(1)
+    }),
+  )
+})
+
+describe("SessionLoop.claim", () => {
+  it.effect("hands one due iteration to a single ticker", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const loops = yield* SessionLoop.Service
+      yield* loops.set({ sessionID, prompt: "tick", interval: 300_000, budget: 3 })
+      const row = yield* db
+        .select()
+        .from(LoopTable)
+        .where(eq(LoopTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+
+      // Every opencode server polls the same machine-global table, so two ticks
+      // routinely read the same row as due before either has written.
+      expect(yield* SessionLoop.claim(db, row!)).toBe(true)
+      expect(yield* SessionLoop.claim(db, row!)).toBe(false)
+
+      // The schedule moves before the work, so failing part-way through loses
+      // the iteration rather than re-admitting its prompt on every tick.
+      expect(yield* loops.due()).toHaveLength(0)
+      expect((yield* loops.get(sessionID))?.iterations).toBe(0)
+    }),
+  )
+
+  it.effect("leaves a stopped loop alone", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const loops = yield* SessionLoop.Service
+      yield* loops.set({ sessionID, prompt: "tick", interval: 60_000 })
+      const row = yield* db
+        .select()
+        .from(LoopTable)
+        .where(eq(LoopTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      yield* loops.stop(sessionID)
+
+      expect(yield* SessionLoop.claim(db, row!)).toBe(false)
     }),
   )
 })

@@ -10,6 +10,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionLoopScheduler } from "@opencode-ai/core/session/loop-scheduler"
 import { JobV2 } from "@opencode-ai/core/job"
 import { JobProjector } from "@opencode-ai/core/job/projector"
+import { JobExecutor } from "@opencode-ai/core/job/executor"
 import { JobExecutorSession } from "@opencode-ai/core/job/executor-session"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
 import { JobScheduler } from "@opencode-ai/core/job/scheduler"
@@ -43,9 +44,6 @@ const applicationServices = LayerNode.group([
   JobStore.node,
   JobV2.node,
   JobRecovery.node,
-  // The session-backed executor replaces the unconfigured default, so a worker
-  // admitted here actually runs.
-  JobExecutorSession.node,
   JobWorktree.node,
   JobVerifier.node,
   JobScheduler.node,
@@ -70,7 +68,13 @@ export function createEmbeddedRoutes() {
 }
 
 function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config, AuthError, AuthServices>) {
-  const serviceLayer = AppNodeBuilder.build(applicationServices, [[SessionExecution.node, SessionExecutionLocal.node]])
+  const serviceLayer = AppNodeBuilder.build(applicationServices, [
+    [SessionExecution.node, SessionExecutionLocal.node],
+    // Installed by replacement, not as a sibling: the scheduler seals its
+    // executor when it compiles, so a worker admitted here only runs under a
+    // session if this is the node it was built with.
+    [JobExecutor.node, JobExecutorSession.node],
+  ])
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),

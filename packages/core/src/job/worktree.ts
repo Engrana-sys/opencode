@@ -50,14 +50,18 @@ export const directory = (input: {
       "worktrees",
       input.projectID,
       input.jobID,
-      // The worker ID keeps two workers of the same role apart; the role keeps
-      // the path readable when someone has to go and look at a dirty tree.
-      `${input.role}-${input.workerID.replace("wrk_", "").slice(0, 8)}`,
+      // The whole worker ID, not a prefix of it: the leading half of an ID is a
+      // millisecond clock, so two workers of one role created in the same loop
+      // would otherwise be handed the same tree and produce a diff belonging to
+      // neither. The role only keeps the path readable for whoever has to go
+      // and look at a dirty tree.
+      `${input.role}-${input.workerID.replace("wrk_", "")}`,
     ),
   )
 
+/** Whole IDs, for the reason `directory` gives: a prefix of one is a clock. */
 export const branch = (input: { readonly jobID: Job.ID; readonly workerID: Job.WorkerID; readonly role: string }) =>
-  `job/${input.jobID.replace("job_", "").slice(0, 8)}/${input.role}-${input.workerID.replace("wrk_", "").slice(0, 8)}`
+  `job/${input.jobID.replace("job_", "")}/${input.role}-${input.workerID.replace("wrk_", "")}`
 
 export interface Interface {
   /**
@@ -87,6 +91,13 @@ const layer = Layer.effect(
     const git = yield* Git.Service
     const global = yield* Global.Service
 
+    /** The tree standing at `target` already, when one is. */
+    const adopt = Effect.fn("JobWorktree.adopt")(function* (repository: Git.Repository, target: AbsolutePath) {
+      const existing = yield* git.worktree.list(repository).pipe(Effect.catch(() => Effect.succeed([])))
+      if (!existing.some((item) => item.directory === target)) return undefined
+      return yield* git.repo.discover(target)
+    })
+
     return Service.of({
       provision: Effect.fn("JobWorktree.provision")(function* (input) {
         if (!writes(input.role)) return undefined
@@ -103,7 +114,13 @@ const layer = Layer.effect(
         })
         const created = yield* git.worktree
           .create({ repository, directory: target })
-          .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          // Provisioning is neither exclusive nor atomic with the event that
+          // records it: two ticks can admit one worker at once, and a process
+          // that dies after `worktree add` comes back with the worker still
+          // holding no tree. `add` then refuses the path forever. A tree at this
+          // worker's own path is this worker's, so adopt it rather than leave a
+          // writer loose in the shared checkout with nothing saying so.
+          .pipe(Effect.catch(() => adopt(repository, target)))
         if (!created) return undefined
         const head = yield* git.history.head(created).pipe(Effect.catch(() => Effect.succeed(undefined)))
         return {

@@ -185,7 +185,8 @@ const LIVE_WORKERS: ReadonlyArray<Job.WorkerStatus> = ["running"]
 
 const DEFAULT_LIMIT = 50
 
-const layer = Layer.effect(
+/** Exported as a test seam: a test wraps it to answer a read differently. */
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service

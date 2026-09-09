@@ -50,8 +50,9 @@ const layer = Layer.effect(
     return Service.of({
       scan: Effect.fn("JobRecovery.scan")(function* () {
         const outcomes: Outcome[] = []
-        const now = DateTime.toEpochMillis(yield* DateTime.now)
-        for (const expired of yield* store.expired()) {
+        const now = yield* DateTime.now
+        const cutoff = DateTime.toEpochMillis(now)
+        for (const expired of yield* store.expired(now)) {
           // The snapshot above is one read that releases the database between
           // statements, and every write below yields again. A heartbeat landing
           // in that gap renews the lease of a worker that is very much alive, so
@@ -59,7 +60,7 @@ const layer = Layer.effect(
           // recovery trusts the lease, and the lease may have moved since.
           const worker = yield* store.worker(expired.id)
           if (worker === undefined || worker.status !== "running") continue
-          if (worker.leaseUntil !== undefined && DateTime.toEpochMillis(worker.leaseUntil) > now) continue
+          if (worker.leaseUntil !== undefined && DateTime.toEpochMillis(worker.leaseUntil) > cutoff) continue
 
           const attempts = yield* store.attempts(worker.id)
           const running = attempts.find((attempt) => attempt.status === "running")
@@ -125,7 +126,9 @@ const layer = Layer.effect(
           // goes back to the queue carrying its backoff — the same move the
           // scheduler makes for an attempt that failed in front of it.
           const decision = JobRetry.decide({
-            exitReason: running || last === undefined ? "stalled" : last.exitReason ?? "stalled",
+            // A worker killed after its attempt failed is retried on what that
+            // attempt reported, so a decision it already made is not retried.
+            exitReason: running === undefined ? (last?.exitReason ?? "stalled") : "stalled",
             attempts: attempts.length,
           })
           const retry =

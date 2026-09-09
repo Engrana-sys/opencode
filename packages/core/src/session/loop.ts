@@ -37,6 +37,38 @@ export const parseInterval = (value: string) => {
   return amount * (match[2] === "s" ? 1_000 : match[2] === "m" ? 60_000 : 3_600_000)
 }
 
+/**
+ * Takes a due row for one iteration by moving `next_run` forward in a single
+ * compare-and-set, and reports whether this caller won it.
+ *
+ * The loop table is machine-global while every opencode server runs its own
+ * ticker, so the row itself is the only place two ticks can agree on who runs
+ * an iteration. Moving the schedule before any of the work also bounds a
+ * failure part-way through: the iteration is lost rather than re-admitted on
+ * every tick forever, against a budget that is never spent.
+ */
+export const claim = Effect.fn("SessionLoop.claim")(function* (
+  db: Database.Interface["db"],
+  row: typeof LoopTable.$inferSelect,
+) {
+  if (row.next_run === null) return false
+  const nextRun = DateTime.addDuration(yield* DateTime.now, clampDelay(row.interval ?? DEFAULT_SELF_PACED_DELAY))
+  const claimed = yield* db
+    .update(LoopTable)
+    .set({ next_run: DateTime.toEpochMillis(nextRun), time_updated: Date.now() })
+    .where(
+      and(
+        eq(LoopTable.session_id, row.session_id),
+        eq(LoopTable.status, "active"),
+        eq(LoopTable.next_run, row.next_run),
+      ),
+    )
+    .returning({ session_id: LoopTable.session_id })
+    .get()
+    .pipe(Effect.orDie)
+  return claimed !== undefined
+})
+
 const fromRow = (row: typeof LoopTable.$inferSelect): Info => ({
   prompt: row.prompt,
   ...(row.interval === null ? {} : { interval: row.interval }),

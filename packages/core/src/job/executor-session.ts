@@ -6,6 +6,7 @@ import { AgentV2 } from "../agent"
 import { makeGlobalNode } from "../effect/app-node"
 import { AbsolutePath } from "../schema"
 import { SessionV2 } from "../session"
+import type { SessionSchema } from "../session/schema"
 import { ModelV2 } from "../model"
 import { ProviderV2 } from "../provider"
 import { JobExecutor } from "./executor"
@@ -16,8 +17,11 @@ import { JobExecutor } from "./executor"
  * A worker is given its own session rather than sharing the one that created
  * the job: its transcript, compaction and context epoch are its own, and a
  * scout burning through context cannot disturb the auditor beside it. The
- * session ID is recorded on the attempt, so the transcript stays reachable
- * afterwards.
+ * session ID is reported on the outcome, ended well or badly, but nothing
+ * writes it to the attempt yet: `AttemptStarted` carries the field and is
+ * published before the session exists, and `AttemptSettled` has nowhere to put
+ * it. Until that is settled in the ledger, a failed attempt's transcript is
+ * only reachable through this outcome.
  *
  * The model is pinned at creation from what the worker asked for. If that model
  * is unavailable the attempt fails with `model_unavailable` rather than
@@ -55,6 +59,20 @@ const reason = (cause: Cause.Cause<unknown>): { readonly exitReason: Job.ExitRea
   return { exitReason: "infrastructure_failure", error: message }
 }
 
+/**
+ * What the session row says the attempt spent.
+ *
+ * Read on the way out of a failed attempt as well as a successful one: the
+ * tokens are burned either way, and an attempt that reported zero would leave a
+ * retried worker spending against a budget that never moves.
+ */
+const spent = (session: SessionSchema.Info): Job.Usage => ({
+  tokensInput: session.tokens.input,
+  tokensOutput: session.tokens.output,
+  tokensCached: session.tokens.cache.read + session.tokens.cache.write,
+  cost: session.cost,
+})
+
 /** What the worker is told to do. Its goal is the job's, narrowed to its role. */
 export const brief = (input: {
   readonly job: Pick<Job.Info, "objective">
@@ -87,12 +105,16 @@ const layer = Layer.effect(
             ? {}
             : { variant: ModelV2.VariantID.make(input.attempt.requested.variant) }),
         }
+        // Held outside the attempt so its failure path can still name the
+        // session and charge what it spent.
+        let sessionID: SessionSchema.ID | undefined
         const outcome = yield* Effect.gen(function* () {
           const session = yield* sessions.create({
             location: { directory: AbsolutePath.make(input.job.directory) },
             agent: AgentV2.ID.make(input.worker.agent),
             model,
           })
+          sessionID = session.id
           yield* sessions.prompt({
             sessionID: session.id,
             prompt: { text: brief({ job: input.job, worker: input.worker }) },
@@ -113,18 +135,31 @@ const layer = Layer.effect(
                   ...(settled.model.variant === undefined ? {} : { variant: settled.model.variant }),
                 }
               : input.attempt.requested,
-            usage: {
-              tokensInput: settled.tokens.input,
-              tokensOutput: settled.tokens.output,
-              tokensCached: settled.tokens.cache.read + settled.tokens.cache.write,
-              cost: settled.cost,
-            },
+            usage: spent(settled),
           }
         }).pipe(
           Effect.catchCause((cause) =>
-            Effect.succeed({
-              ...reason(cause),
-              usage: { tokensInput: 0, tokensOutput: 0, tokensCached: 0, cost: 0 },
+            Effect.gen(function* () {
+              const settled =
+                sessionID === undefined
+                  ? undefined
+                  : yield* sessions.get(sessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+              return {
+                ...reason(cause),
+                ...(sessionID === undefined ? {} : { sessionID }),
+                // A failed attempt that reached a model still resolved one, and
+                // a fallback hidden by the failure is a fallback all the same.
+                ...(settled?.model === undefined
+                  ? {}
+                  : {
+                      resolved: {
+                        providerID: settled.model.providerID,
+                        modelID: settled.model.id,
+                        ...(settled.model.variant === undefined ? {} : { variant: settled.model.variant }),
+                      },
+                    }),
+                usage: settled ? spent(settled) : { tokensInput: 0, tokensOutput: 0, tokensCached: 0, cost: 0 },
+              }
             }),
           ),
         )
