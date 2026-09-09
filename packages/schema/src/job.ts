@@ -118,6 +118,18 @@ export const WorkerStatus = Schema.Literals([
 export type WorkerStatus = typeof WorkerStatus.Type
 
 /**
+ * A worker that has stopped is done.
+ *
+ * `stale` ends a worker rather than pausing it: recovery declares it about work
+ * nobody is doing any more, and the projection already drops the lease and
+ * stamps a completion time for it. Running the work again means a new worker,
+ * so what the ledger records about this one stays true.
+ */
+export const WORKER_TERMINAL: ReadonlyArray<WorkerStatus> = ["completed", "failed", "cancelled", "stale"]
+
+export const isWorkerTerminal = (status: WorkerStatus) => WORKER_TERMINAL.includes(status)
+
+/**
  * How long a worker's lease is good for.
  *
  * Long enough to survive a slow provider turn, short enough that a crash is
@@ -131,6 +143,9 @@ export const AttemptStatus = Schema.Literals(["running", "completed", "failed", 
   identifier: "Job.AttemptStatus",
 })
 export type AttemptStatus = typeof AttemptStatus.Type
+
+/** An attempt is either in flight or over; a settled one never runs again. */
+export const isAttemptSettled = (status: AttemptStatus) => status !== "running"
 
 export const ArtifactType = Schema.Literals([
   "finding",

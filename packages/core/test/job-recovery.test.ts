@@ -142,11 +142,118 @@ describe("JobRecovery", () => {
       // Nothing was written, so running it again costs nothing.
       expect(outcomes[0].disposition).toBe("retryable")
 
-      expect((yield* store.worker(worker.id))?.status).toBe("stale")
+      // The verdict has to move the worker: `stale` is terminal, so a worker
+      // left there could never run again and its job could never end.
+      const recovered = yield* store.worker(worker.id)
+      expect(recovered?.status).toBe("queued")
+      expect(recovered?.retryAfter).toBeDefined()
       // The in-flight attempt gets an outcome instead of running forever.
       const settled = (yield* store.attempts(worker.id)).find((item) => item.id === attempt.id)
       expect(settled?.status).toBe("stale")
       expect(settled?.exitReason).toBe("stalled")
+    }),
+  )
+
+  it.effect("stops requeueing once the retry policy says the attempts are spent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      for (const _ of [1, 2]) {
+        const spent = yield* jobs.startAttempt({
+          workerID: worker.id,
+          requested: { providerID: "mistral", modelID: "codestral" },
+        })
+        yield* jobs.settleAttempt({
+          attemptID: spent.id,
+          workerID: worker.id,
+          status: "failed",
+          exitReason: "timeout",
+        })
+      }
+      yield* jobs.startAttempt({ workerID: worker.id, requested: { providerID: "mistral", modelID: "codestral" } })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
+
+      expect((yield* recovery.scan())[0].disposition).toBe("retryable")
+      // Safe to re-run is not the same as worth re-running: a worker that has
+      // spent its attempts stops here rather than looping through the queue.
+      expect((yield* store.worker(worker.id))?.status).toBe("stale")
+    }),
+  )
+
+  it.effect("a dead worker that writes needs review even with no worktree of its own", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      // A project that is not a git repository gets no worktree, and its
+      // builder edits the checkout itself — the diff is just as half-applied.
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "builder", agent: "builder", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      yield* jobs.startAttempt({ workerID: worker.id, requested: { providerID: "mistral", modelID: "codestral" } })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
+
+      const outcomes = yield* recovery.scan()
+      expect(outcomes[0].disposition).toBe("needs_review")
+      expect(outcomes[0].reason).not.toContain("wrote nothing")
+      expect((yield* store.worker(worker.id))?.status).toBe("stale")
+    }),
+  )
+
+  it.effect("finishes the move a process died before making", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      const attempt = yield* jobs.startAttempt({
+        workerID: worker.id,
+        requested: { providerID: "mistral", modelID: "codestral" },
+      })
+      // Settling an attempt and moving its worker are two durable writes; this
+      // process died between them, so the work succeeded and only the second
+      // write is missing.
+      yield* jobs.settleAttempt({
+        attemptID: attempt.id,
+        workerID: worker.id,
+        status: "completed",
+        exitReason: "success",
+        usage: { tokensInput: 40_000, tokensOutput: 8_000, tokensCached: 0, cost: 0.42 },
+      })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
+
+      // Nothing here needs a decision: the work is done.
+      expect(yield* recovery.scan()).toHaveLength(0)
+      expect((yield* store.worker(worker.id))?.status).toBe("completed")
+      expect((yield* store.attempts(worker.id))[0]?.status).toBe("completed")
+    }),
+  )
+
+  it.effect("says what actually happened when no attempt was ever started", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const recovery = yield* JobRecovery.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "fixer", agent: "fixer", requested: model("mistral", "codestral"), worktree })
+      // Killed between the transition into `running` and its first attempt.
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      yield* TestClock.adjust(Duration.millis(Job.LEASE_MS + 1))
+
+      const outcomes = yield* recovery.scan()
+      // The verdict is the only artifact recovery produces; it may not claim an
+      // attempt stalled when none ever ran.
+      expect(outcomes[0].reason).toContain("before any attempt started")
+      expect(outcomes[0].reason).not.toContain("stalled")
     }),
   )
 

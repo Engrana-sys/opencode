@@ -149,6 +149,14 @@ export interface Interface {
   readonly timeline: (jobID: Job.ID, after?: number) => Effect.Effect<ReadonlyArray<EventV2.Payload>>
   /** Live workers whose lease has lapsed. Recovery treats these as abandoned. */
   readonly expired: (now?: DateTime.Utc) => Effect.Effect<ReadonlyArray<Job.Worker>>
+  /**
+   * Every worker that reads `running`, whatever its job's status, with the
+   * project it belongs to. What occupies a slot is a worker that is executing,
+   * and a job settling underneath one does not stop it.
+   */
+  readonly running: () => Effect.Effect<
+    ReadonlyArray<{ readonly projectID: ProjectV2.ID; readonly worker: Job.Worker }>
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/JobStore") {}
@@ -307,6 +315,17 @@ const layer = Layer.effect(
         // A live worker with no lease at all has never started one; treat it as
         // expired too, so nothing claiming to run escapes the recovery scan.
         return rows.filter((row) => row.lease_until === null || row.lease_until <= cutoff).map(workerFromRow)
+      }),
+
+      running: Effect.fn("JobStore.running")(function* () {
+        const rows = yield* db
+          .select({ projectID: JobTable.project_id, worker: JobWorkerTable })
+          .from(JobWorkerTable)
+          .innerJoin(JobTable, eq(JobWorkerTable.job_id, JobTable.id))
+          .where(eq(JobWorkerTable.status, "running"))
+          .all()
+          .pipe(Effect.orDie)
+        return rows.map((row) => ({ projectID: row.projectID, worker: workerFromRow(row.worker) }))
       }),
     })
   }),

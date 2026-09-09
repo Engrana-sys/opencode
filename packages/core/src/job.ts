@@ -67,6 +67,24 @@ export class InvalidTransitionError extends Schema.TaggedErrorClass<InvalidTrans
   }
 }
 
+export class InvalidWorkerTransitionError extends Schema.TaggedErrorClass<InvalidWorkerTransitionError>()(
+  "Job.InvalidWorkerTransitionError",
+  { workerID: Job.WorkerID, from: Job.WorkerStatus, to: Job.WorkerStatus },
+) {
+  override get message() {
+    return `Worker ${this.workerID} cannot move from ${this.from} to ${this.to}`
+  }
+}
+
+export class AttemptSettledError extends Schema.TaggedErrorClass<AttemptSettledError>()("Job.AttemptSettledError", {
+  attemptID: Job.AttemptID,
+  status: Job.AttemptStatus,
+}) {
+  override get message() {
+    return `Attempt ${this.attemptID} is already ${this.status}`
+  }
+}
+
 export class TreeLimitError extends Schema.TaggedErrorClass<TreeLimitError>()("Job.TreeLimitError", {
   jobID: Job.ID,
   limit: Schema.String,
@@ -76,7 +94,13 @@ export class TreeLimitError extends Schema.TaggedErrorClass<TreeLimitError>()("J
   }
 }
 
-export type Error = JobNotFoundError | WorkerNotFoundError | InvalidTransitionError | TreeLimitError
+export type Error =
+  | JobNotFoundError
+  | WorkerNotFoundError
+  | InvalidTransitionError
+  | InvalidWorkerTransitionError
+  | AttemptSettledError
+  | TreeLimitError
 
 export interface Interface {
   readonly create: (input: {
@@ -140,7 +164,7 @@ export interface Interface {
     readonly reason?: string
     /** Backoff before a requeued worker may be admitted again. */
     readonly retryAfterMs?: number
-  }) => Effect.Effect<void, WorkerNotFoundError>
+  }) => Effect.Effect<void, WorkerNotFoundError | InvalidWorkerTransitionError>
 
   /** Records the tree a writing worker was given, once it is admitted to run. */
   readonly assignWorktree: (input: {
@@ -180,7 +204,7 @@ export interface Interface {
     readonly exitReason: Job.ExitReason
     readonly usage?: Job.Usage
     readonly error?: string
-  }) => Effect.Effect<void, WorkerNotFoundError>
+  }) => Effect.Effect<void, WorkerNotFoundError | AttemptSettledError>
 
   /** Records a verdict in the ledger, so what was checked stays readable later. */
   readonly recordVerification: (input: {
@@ -335,6 +359,17 @@ const layer = Layer.effect(
     const workerStatus: Interface["workerStatus"] = Effect.fn("Job.workerStatus")(function* (input) {
       const worker = yield* requireWorker(input.workerID)
       if (worker.status === input.to) return
+      // A worker that has stopped stays stopped. Recovery and a late executor
+      // aim at the same worker from opposite sides, and without this whichever
+      // writes second erases the other: work flagged for review reads
+      // `completed`, or a settled worker is put back into `running` and handed
+      // a fresh lease while its completion time still stands.
+      if (Job.isWorkerTerminal(worker.status))
+        return yield* new InvalidWorkerTransitionError({
+          workerID: input.workerID,
+          from: worker.status,
+          to: input.to,
+        })
       const now = yield* DateTime.now
       yield* events.publish(JobEvent.WorkerStatusChanged, {
         jobID: worker.jobID,
@@ -406,6 +441,13 @@ const layer = Layer.effect(
 
     const settleAttempt: Interface["settleAttempt"] = Effect.fn("Job.settleAttempt")(function* (input) {
       const worker = yield* requireWorker(input.workerID)
+      // An attempt is settled once. Recovery settling a stalled attempt and its
+      // executor returning minutes later both write this row, and a second
+      // settlement would replace the first outcome with the loser's while its
+      // usage was added again to the worker and job rollups budgets read.
+      const attempt = (yield* store.attempts(input.workerID)).find((item) => item.id === input.attemptID)
+      if (attempt && Job.isAttemptSettled(attempt.status))
+        return yield* new AttemptSettledError({ attemptID: input.attemptID, status: attempt.status })
       yield* events.publish(JobEvent.AttemptSettled, {
         jobID: worker.jobID,
         timestamp: yield* DateTime.now,

@@ -231,6 +231,54 @@ describe("JobScheduler", () => {
     }),
   )
 
+  it.effect("stops the work a spent budget settled, not only the ledger entry", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const scheduler = yield* JobScheduler.Service
+      const store = yield* JobStore.Service
+      const job = yield* newJob({ maxCost: 1 })
+      const spender = yield* queued(job.id, "spender")
+      const bystander = yield* queued(job.id, "bystander")
+
+      yield* scheduler.tick()
+      yield* Deferred.succeed(gates.get(spender.id)!, {
+        exitReason: "success",
+        usage: { ...noUsage, cost: 2 },
+      })
+      yield* Effect.yieldNow
+
+      // The budget is blown by the first worker while the second is mid-attempt.
+      // Settling only the job would leave that one calling the provider, and
+      // renewing the lease that keeps recovery away from it, on a job the ledger
+      // already records as failed.
+      yield* scheduler.tick()
+      expect((yield* store.get(job.id))?.status).toBe("failed")
+      expect((yield* store.worker(bystander.id))?.status).toBe("cancelled")
+      expect((yield* store.attempts(bystander.id))[0].status).toBe("cancelled")
+    }),
+  )
+
+  it.effect("keeps counting the running workers of a job that settled under them", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const scheduler = yield* JobScheduler.Service
+      const jobs = yield* JobV2.Service
+      const abandoned = yield* newJob()
+      yield* queued(abandoned.id, "a")
+      yield* queued(abandoned.id, "b")
+      expect(yield* scheduler.tick()).toHaveLength(2)
+
+      // Cancelling the job does not stop the two attempts already in flight, so
+      // their slots are still taken. Reading occupancy from the eligible jobs
+      // alone would hand them out twice and run four workers against a two.
+      yield* jobs.settle({ jobID: abandoned.id, status: "cancelled" })
+      yield* queued((yield* newJob()).id, "c")
+
+      expect(yield* scheduler.tick()).toHaveLength(0)
+      expect(started).toHaveLength(2)
+    }),
+  )
+
   it.effect("ignores workers of a job that already settled", () =>
     Effect.gen(function* () {
       yield* setup

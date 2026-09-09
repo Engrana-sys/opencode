@@ -316,6 +316,75 @@ describe("Job", () => {
     }),
   )
 
+  it.effect("a worker that stopped stays stopped", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "fixer", agent: "fixer", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "stale", reason: "Lease expired" })
+      const abandoned = yield* store.worker(worker.id)
+
+      // Recovery declared this worker abandoned and someone has to look at what
+      // it left behind. An executor returning late must not be able to record
+      // it as a clean finish instead.
+      const settling = yield* jobs.workerStatus({ workerID: worker.id, to: "completed" }).pipe(Effect.flip)
+      expect(settling._tag).toBe("Job.InvalidWorkerTransitionError")
+      // Nor may it be put back to work: that would grant a fresh lease to a row
+      // that already carries a completion time.
+      const reviving = yield* jobs.workerStatus({ workerID: worker.id, to: "running" }).pipe(Effect.flip)
+      expect(reviving._tag).toBe("Job.InvalidWorkerTransitionError")
+
+      const after = yield* store.worker(worker.id)
+      expect(after?.status).toBe("stale")
+      expect(after?.leaseUntil).toBeUndefined()
+      expect(after?.timeCompleted).toEqual(abandoned?.timeCompleted)
+    }),
+  )
+
+  it.effect("an attempt is settled once", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      const attempt = yield* jobs.startAttempt({ workerID: worker.id, requested: model("mistral", "codestral") })
+      yield* jobs.settleAttempt({
+        attemptID: attempt.id,
+        workerID: worker.id,
+        status: "completed",
+        exitReason: "success",
+        usage: { tokensInput: 1_000, tokensOutput: 500, tokensCached: 0, cost: 2 },
+      })
+
+      // Recovery settling a stalled attempt after its executor already reported
+      // would rewrite the outcome, and its usage would be rolled up twice into
+      // the very totals budgets are enforced against.
+      const late = yield* jobs
+        .settleAttempt({
+          attemptID: attempt.id,
+          workerID: worker.id,
+          status: "stale",
+          exitReason: "stalled",
+          error: "The process holding this attempt stopped reporting.",
+        })
+        .pipe(Effect.flip)
+      expect(late._tag).toBe("Job.AttemptSettledError")
+
+      const settled = (yield* store.attempts(worker.id)).find((item) => item.id === attempt.id)
+      expect(settled?.status).toBe("completed")
+      expect(settled?.exitReason).toBe("success")
+      expect(settled?.error).toBeUndefined()
+      const spent = { tokensInput: 1_000, tokensOutput: 500, tokensCached: 0, cost: 2 }
+      expect(settled?.usage).toEqual(spent)
+      expect((yield* store.worker(worker.id))?.usage).toEqual(spent)
+      expect((yield* store.get(job.id))?.usage).toEqual(spent)
+    }),
+  )
+
   it.effect("a running worker with a lapsed lease is not running", () =>
     Effect.gen(function* () {
       yield* setup

@@ -1,6 +1,6 @@
 export * as JobScheduler from "./scheduler"
 
-import { Context, DateTime, Effect, FiberSet, Layer, Schedule } from "effect"
+import { Context, DateTime, Effect, Fiber, FiberSet, Layer, Schedule } from "effect"
 import { Job } from "@opencode-ai/schema/job"
 import { makeGlobalNode } from "../effect/app-node"
 import { JobV2 } from "../job"
@@ -55,6 +55,9 @@ const layer = (limits: JobAdmission.Limits) =>
       const executor = yield* JobExecutor.Service
       const worktrees = yield* JobWorktree.Service
       const workers = yield* FiberSet.make<void>()
+      // Keyed by worker because a job that must stop has to reach its own
+      // attempts, and the set alone cannot name one of them.
+      const fibers = new Map<Job.WorkerID, Fiber.Fiber<void>>()
       // Assigned once `tick` exists below. A finished worker wakes the loop
       // through this so its slot is taken now rather than at the next tick;
       // suspending defers reading it until there is something to read.
@@ -146,15 +149,55 @@ const layer = (limits: JobAdmission.Limits) =>
           workerID: input.worker.id,
           requested: input.worker.requested,
         })
-        yield* beating(input.worker.id, executor.run({ job: input.job, worker: input.worker, attempt }))
-          .pipe(
-            Effect.flatMap((outcome) => settle({ workerID: input.worker.id, attempt }, outcome)),
-            // A slot freed now must be taken now, not at the next tick.
-            Effect.ensuring(wake),
-            Effect.ignore,
-            FiberSet.run(workers),
-          )
+        const fiber = yield* beating(
+          input.worker.id,
+          executor.run({ job: input.job, worker: input.worker, attempt }),
+        ).pipe(
+          Effect.flatMap((outcome) => settle({ workerID: input.worker.id, attempt }, outcome)),
+          Effect.ensuring(Effect.sync(() => fibers.delete(input.worker.id))),
+          // A slot freed now must be taken now, not at the next tick.
+          Effect.ensuring(wake),
+          Effect.ignore,
+          FiberSet.run(workers),
+        )
+        fibers.set(input.worker.id, fiber)
         return input.worker.id
+      })
+
+      /**
+       * Stops a settled job's work, not only its ledger entry.
+       *
+       * A budget that recorded exhaustion and left the fibers alone would be
+       * advisory: the attempts keep calling the provider, keep renewing their
+       * leases so recovery never sees them, and roll their usage into a job
+       * that is already over. Interrupting first ends the attempt's own
+       * settlement before it can race this one, and the heartbeat dies with the
+       * scope, so nothing is left vouching for work that has stopped.
+       */
+      const halt = Effect.fn("JobScheduler.halt")(function* (jobID: Job.ID, reason: string) {
+        for (const worker of yield* store.workers(jobID)) {
+          if (Job.isWorkerTerminal(worker.status)) continue
+          const fiber = fibers.get(worker.id)
+          if (fiber) yield* Fiber.interrupt(fiber)
+          // An interrupted attempt never reaches its own settlement, so it
+          // would otherwise stay `running` under a job that is finished.
+          for (const attempt of yield* store.attempts(worker.id)) {
+            if (Job.isAttemptSettled(attempt.status)) continue
+            yield* jobs
+              .settleAttempt({
+                attemptID: attempt.id,
+                workerID: worker.id,
+                status: "cancelled",
+                exitReason: "cancelled",
+                error: reason,
+              })
+              .pipe(Effect.ignore)
+          }
+          // Queued workers stop here too: nothing may start under a job the
+          // ledger has already settled, and one left queued is never surfaced
+          // by `JobStore.live` again.
+          yield* jobs.workerStatus({ workerID: worker.id, to: "cancelled", reason }).pipe(Effect.ignore)
+        }
       })
 
       const tick: Interface["tick"] = Effect.fn("JobScheduler.tick")(function* () {
@@ -178,13 +221,22 @@ const layer = (limits: JobAdmission.Limits) =>
             continue
           }
           // Budgets settle work rather than warning about it.
-          yield* jobs
-            .settle({ jobID: job.id, status: "failed", error: JobBudget.describe(verdict) })
-            .pipe(Effect.ignore)
+          const reason = JobBudget.describe(verdict)
+          yield* jobs.settle({ jobID: job.id, status: "failed", error: reason }).pipe(Effect.ignore)
+          yield* halt(job.id, reason)
         }
 
         const candidates: JobAdmission.Candidate[] = []
-        const running: JobAdmission.Running[] = []
+        // Occupancy is read from the database, not a counter in memory, so it
+        // survives a restart and agrees with what recovery sees. It counts every
+        // worker that reads `running`, not only those of the jobs still eligible:
+        // a worker whose job settled or blew its budget underneath it keeps its
+        // fiber, its lease and its spend, so it keeps its slot until it stops.
+        const running: JobAdmission.Running[] = (yield* store.running()).map((entry) => ({
+          projectID: entry.projectID,
+          providerID: entry.worker.requested.providerID,
+          modelID: entry.worker.requested.modelID,
+        }))
         const byJob = new Map<Job.ID, Job.Info>()
         const now = yield* DateTime.now
         for (const job of eligible) {
@@ -201,14 +253,6 @@ const layer = (limits: JobAdmission.Limits) =>
                 projectID: job.projectID,
                 requested: worker.requested,
                 enqueuedAt: DateTime.toEpochMillis(worker.timeCreated),
-              })
-            // Occupancy is read from the database, not a counter in memory, so it
-            // survives a restart and agrees with what recovery sees.
-            if (worker.status === "running")
-              running.push({
-                projectID: job.projectID,
-                providerID: worker.requested.providerID,
-                modelID: worker.requested.modelID,
               })
           }
         }
