@@ -295,6 +295,27 @@ describe("Job", () => {
     }),
   )
 
+  it.effect("only one caller can claim a queued worker", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "queued" })
+
+      // Two overlapping scheduler ticks both read this worker as queued. Both
+      // calls succeed, so only the answer separates them — and a caller that
+      // cannot tell "I moved it" from "it was already there" opens a second
+      // attempt against one lease and one worktree.
+      expect(yield* jobs.workerStatus({ workerID: worker.id, to: "running" })).toBe(true)
+      expect(yield* jobs.workerStatus({ workerID: worker.id, to: "running" })).toBe(false)
+
+      // The loser's call changes nothing: one transition, one lease.
+      expect((yield* store.worker(worker.id))?.status).toBe("running")
+    }),
+  )
+
   it.effect("a settled worker holds no lease", () =>
     Effect.gen(function* () {
       yield* setup

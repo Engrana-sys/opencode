@@ -158,13 +158,21 @@ export interface Interface {
     readonly worktree?: Job.Worktree
   }) => Effect.Effect<Job.Worker, JobNotFoundError | WorkerNotFoundError | TreeLimitError>
 
+  /**
+   * Moves a worker, and says whether this caller is the one that moved it.
+   *
+   * `false` means the worker was already there — someone else got to it first.
+   * A caller that acts on the transition rather than merely recording it has to
+   * know the difference: two schedulers racing for one queued worker both see a
+   * successful call otherwise, and both start an attempt.
+   */
   readonly workerStatus: (input: {
     readonly workerID: Job.WorkerID
     readonly to: Job.WorkerStatus
     readonly reason?: string
     /** Backoff before a requeued worker may be admitted again. */
     readonly retryAfterMs?: number
-  }) => Effect.Effect<void, WorkerNotFoundError | InvalidWorkerTransitionError>
+  }) => Effect.Effect<boolean, WorkerNotFoundError | InvalidWorkerTransitionError>
 
   /** Records the tree a writing worker was given, once it is admitted to run. */
   readonly assignWorktree: (input: {
@@ -358,7 +366,12 @@ const layer = Layer.effect(
 
     const workerStatus: Interface["workerStatus"] = Effect.fn("Job.workerStatus")(function* (input) {
       const worker = yield* requireWorker(input.workerID)
-      if (worker.status === input.to) return
+      // Already there, so this caller did not put it there. Reporting that as an
+      // ordinary success is what let two overlapping scheduler ticks each start
+      // the same queued worker: the first moved it to `running`, the second saw
+      // `running`, returned quietly, and its caller went on to open a second
+      // attempt against one lease and one worktree.
+      if (worker.status === input.to) return false
       // A worker that has stopped stays stopped. Recovery and a late executor
       // aim at the same worker from opposite sides, and without this whichever
       // writes second erases the other: work flagged for review reads
@@ -382,6 +395,7 @@ const layer = Layer.effect(
           ? {}
           : { retryAfter: DateTime.addDuration(now, input.retryAfterMs) }),
       })
+      return true
     })
 
     const assignWorktree: Interface["assignWorktree"] = Effect.fn("Job.assignWorktree")(function* (input) {

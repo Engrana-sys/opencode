@@ -130,29 +130,38 @@ const layer = (limits: JobAdmission.Limits) =>
         readonly job: Job.Info
         readonly worker: Job.Worker
       }) {
+        // Claiming comes first, and it is a claim rather than a notification:
+        // ticks overlap, because finishing work forks one on top of the periodic
+        // one. Whoever moves the worker out of `queued` owns it, and everyone
+        // else stops here instead of opening a second attempt against the one
+        // lease and the one worktree. The transition also grants that lease, so
+        // there is no window where the worker reads `running` with none and
+        // recovery can reclaim it out from under us.
+        if (!(yield* jobs.workerStatus({ workerID: input.worker.id, to: "running" }))) return undefined
         // Provisioned on admission rather than on creation: a worker that never
         // runs should leave no checkout behind. A worker that already holds one
         // keeps it, so a retry resumes in the tree its previous attempt used.
-        if (input.worker.worktree === undefined) {
-          const worktree = yield* worktrees.provision({
+        let worktree = input.worker.worktree
+        if (worktree === undefined) {
+          const provisioned = yield* worktrees.provision({
             job: input.job,
             workerID: input.worker.id,
             role: input.worker.role,
           })
-          if (worktree) yield* jobs.assignWorktree({ workerID: input.worker.id, worktree })
+          if (provisioned) {
+            yield* jobs.assignWorktree({ workerID: input.worker.id, worktree: provisioned })
+            worktree = provisioned
+          }
         }
-        // The transition grants the first lease; the heartbeat below only
-        // renews it, so there is no window where this worker reads `running`
-        // with no lease and recovery can reclaim it out from under us.
-        yield* jobs.workerStatus({ workerID: input.worker.id, to: "running" })
         const attempt = yield* jobs.startAttempt({
           workerID: input.worker.id,
           requested: input.worker.requested,
         })
-        const fiber = yield* beating(
-          input.worker.id,
-          executor.run({ job: input.job, worker: input.worker, attempt }),
-        ).pipe(
+        // Carried explicitly: `input.worker` was read before the tree existed,
+        // and handing the executor that stale copy is how a worker ends up
+        // working outside the tree the ledger says it owns.
+        const worker = worktree === undefined ? input.worker : { ...input.worker, worktree }
+        const fiber = yield* beating(input.worker.id, executor.run({ job: input.job, worker, attempt })).pipe(
           Effect.flatMap((outcome) => settle({ workerID: input.worker.id, attempt }, outcome)),
           Effect.ensuring(Effect.sync(() => fibers.delete(input.worker.id))),
           // A slot freed now must be taken now, not at the next tick.
@@ -262,7 +271,10 @@ const layer = (limits: JobAdmission.Limits) =>
           const job = byJob.get(admitted.jobID)
           const worker = yield* store.worker(admitted.workerID)
           if (!job || !worker) continue
-          started.push(yield* start({ job, worker }).pipe(Effect.orElseSucceed(() => admitted.workerID)))
+          // `undefined` means another tick claimed this worker first, so it is
+          // not one of ours to report as started.
+          const claimed = yield* start({ job, worker }).pipe(Effect.orElseSucceed(() => admitted.workerID))
+          if (claimed !== undefined) started.push(claimed)
         }
         return started
       })
