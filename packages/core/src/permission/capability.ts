@@ -67,12 +67,27 @@ export const widens = (input: {
 /**
  * Rewrites a child's ruleset so it can never exceed its parent.
  *
- * Every rule the child declares is capped by what the parent's own rules say
- * about that same action and resource, and the parent's rules are prepended so
- * anything the child does not mention still falls under them. The result is a
- * ruleset that can be handed to ordinary evaluation with no further ceremony —
- * which matters, because a rule that has to be remembered is a rule that gets
- * forgotten.
+ * The result is a ruleset that can be handed to ordinary evaluation with no
+ * further ceremony — which matters, because a rule that has to be remembered is
+ * a rule that gets forgotten. Getting there takes three layers, and the order is
+ * the whole mechanism:
+ *
+ * 1. **The parent's rules**, so anything the child does not mention still falls
+ *    under them.
+ * 2. **The child's rules**, capped rule by rule, so the child can narrow what it
+ *    was given.
+ * 3. **The parent's restrictions again, last.** `PermissionV2.evaluate` resolves
+ *    by `findLast`, so whatever sits at the end has the final word. Without this
+ *    layer a child rule that is merely *broader* than the parent's denial wins
+ *    over it: a parent denying `rm *` and allowing everything else, given a
+ *    child that allows `*`, would permit `rm -rf /`. The per-rule cap in layer 2
+ *    cannot catch that on its own, because it asks the parent about the child's
+ *    pattern as though the pattern were a concrete resource, and `rm *` does not
+ *    match the literal string `*`.
+ *
+ * A rule that only ever loosens is not a restriction, which is why layer 3 keeps
+ * `deny` and `ask` and drops `allow`: re-appending the parent's permissions would
+ * undo the narrowing the child is entitled to make.
  */
 export const clamp = (input: {
   readonly parent: Permission.Ruleset
@@ -83,4 +98,5 @@ export const clamp = (input: {
     ...rule,
     effect: restrict(rule.effect, PermissionV2.evaluate(rule.action, rule.resource, input.parent).effect),
   })),
+  ...input.parent.filter((rule) => rule.effect !== "allow"),
 ]

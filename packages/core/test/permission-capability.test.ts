@@ -116,4 +116,26 @@ describe("Capability.clamp", () => {
     expect(PermissionV2.evaluate("edit", "/etc/passwd", clamped).effect).toBe("deny")
     expect(PermissionV2.evaluate("edit", "/src/a.ts", clamped).effect).toBe("allow")
   })
+
+  it("a child cannot reach past a narrow denial by asking broadly", () => {
+    // The mirror of the test above, and the harder half. Capping a child rule
+    // asks the parent about the child's *pattern* as though it were a resource,
+    // and `rm *` does not match the literal string `*` — so the cap sees no
+    // objection and the broad child rule, sitting last, would otherwise win.
+    const parent: Permission.Ruleset = [rule("bash", "*", "allow"), rule("bash", "rm *", "deny")]
+    const clamped = Capability.clamp({ parent, child: [rule("bash", "*", "allow")] })
+    expect(PermissionV2.evaluate("bash", "rm -rf /", parent).effect).toBe("deny")
+    expect(PermissionV2.evaluate("bash", "rm -rf /", clamped).effect).toBe("deny")
+    // And the delegation is still worth having: everything else still runs.
+    expect(PermissionV2.evaluate("bash", "ls", clamped).effect).toBe("allow")
+  })
+
+  it("an ask the parent imposed is not downgraded by a broad child allow", () => {
+    // `ask` is a restriction too. A child that allows everything must still stop
+    // at a question its parent wanted asked.
+    const parent: Permission.Ruleset = [rule("*", "*", "allow"), rule("webfetch", "*", "ask")]
+    const clamped = Capability.clamp({ parent, child: [rule("*", "*", "allow")] })
+    expect(PermissionV2.evaluate("webfetch", "https://example.com", clamped).effect).toBe("ask")
+    expect(PermissionV2.evaluate("read", "/src/a.ts", clamped).effect).toBe("allow")
+  })
 })
