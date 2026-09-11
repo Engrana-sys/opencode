@@ -296,6 +296,51 @@ describe("Job", () => {
     }),
   )
 
+  it.effect("a heartbeat is not history and appends nothing to the ledger", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const { db } = yield* Database.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+
+      const before = (yield* db.select().from(EventTable).all().pipe(Effect.orDie)).length
+      for (let beat = 0; beat < 20; beat++) yield* jobs.heartbeat({ workerID: worker.id, leaseMs: 60_000 })
+
+      // Twenty renewals used to be twenty ledger rows. Four workers beating
+      // every thirty seconds appended some eleven thousand a day, burying the
+      // handful of entries that said what the job actually did.
+      expect((yield* db.select().from(EventTable).all().pipe(Effect.orDie)).length).toBe(before)
+    }),
+  )
+
+  it.effect("rebuilding the projections leaves a live lease alone", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "scout", agent: "scout", requested: model("mistral", "codestral") })
+      yield* jobs.workerStatus({ workerID: worker.id, to: "running" })
+      yield* jobs.heartbeat({ workerID: worker.id, leaseMs: 60_000 })
+      expect(yield* store.expired()).toHaveLength(0)
+
+      // A lease says what is running right now. It lives outside the
+      // projections precisely so that rebuilding them — which may happen at any
+      // time and reads a history in which every heartbeat is long past — cannot
+      // declare live work abandoned.
+      for (const table of [JobAttemptTable, JobWorkerTable, JobStepTable, JobTable])
+        yield* db.delete(table).run().pipe(Effect.orDie)
+      yield* events.rebuild(job.id)
+
+      expect((yield* store.worker(worker.id))?.leaseUntil).toBeDefined()
+      expect(yield* store.expired()).toHaveLength(0)
+    }),
+  )
+
   it.effect("a recorded verdict is readable without decoding the ledger", () =>
     Effect.gen(function* () {
       yield* setup

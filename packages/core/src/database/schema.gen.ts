@@ -185,6 +185,15 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`job_worker_lease\` (
+          \`worker_id\` text PRIMARY KEY,
+          \`heartbeat_at\` integer NOT NULL,
+          \`lease_until\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`job_worker\` (
           \`id\` text PRIMARY KEY,
           \`job_id\` text NOT NULL,
@@ -199,8 +208,6 @@ export default {
           \`permissions\` text NOT NULL,
           \`status\` text NOT NULL,
           \`worktree\` text,
-          \`heartbeat_at\` integer,
-          \`lease_until\` integer,
           \`retry_after\` integer,
           \`tokens_input\` integer DEFAULT 0 NOT NULL,
           \`tokens_output\` integer DEFAULT 0 NOT NULL,
@@ -404,7 +411,6 @@ export default {
       yield* tx.run(`CREATE INDEX \`job_verification_worker_idx\` ON \`job_verification\` (\`worker_id\`);`)
       yield* tx.run(`CREATE INDEX \`job_worker_job_idx\` ON \`job_worker\` (\`job_id\`);`)
       yield* tx.run(`CREATE INDEX \`job_worker_parent_idx\` ON \`job_worker\` (\`parent_id\`);`)
-      yield* tx.run(`CREATE INDEX \`job_worker_lease_idx\` ON \`job_worker\` (\`status\`,\`lease_until\`);`)
       yield* tx.run(`CREATE INDEX \`job_worker_queue_idx\` ON \`job_worker\` (\`status\`,\`requested_provider\`);`)
       yield* tx.run(
         `CREATE UNIQUE INDEX \`permission_project_action_resource_idx\` ON \`permission\` (\`project_id\`,\`action\`,\`resource\`);`,

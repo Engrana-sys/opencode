@@ -87,8 +87,6 @@ export const JobWorkerTable = sqliteTable(
     permissions: text({ mode: "json" }).$type<Permission.Ruleset>().notNull(),
     status: text().$type<Job.WorkerStatus>().notNull(),
     worktree: text({ mode: "json" }).$type<Job.Worktree>(),
-    heartbeat_at: integer(),
-    lease_until: integer(),
     retry_after: integer(),
     tokens_input: integer().notNull().default(0),
     tokens_output: integer().notNull().default(0),
@@ -100,8 +98,6 @@ export const JobWorkerTable = sqliteTable(
   (table) => [
     index("job_worker_job_idx").on(table.job_id),
     index("job_worker_parent_idx").on(table.parent_id),
-    // Recovery scans live workers by lease expiry; keep that a range scan.
-    index("job_worker_lease_idx").on(table.status, table.lease_until),
     index("job_worker_queue_idx").on(table.status, table.requested_provider),
   ],
 )
@@ -165,6 +161,33 @@ export const JobArtifactTable = sqliteTable(
   },
   (table) => [index("job_artifact_job_idx").on(table.job_id), index("job_artifact_worker_idx").on(table.worker_id)],
 )
+
+/**
+ * A running worker's lease, which is runtime state rather than history.
+ *
+ * It lives in its own table, outside the ledger and outside every projection,
+ * for two reasons. A lease renewal is not a fact worth keeping forever: four
+ * workers heartbeating every thirty seconds appended some eleven thousand rows a
+ * day to `event`, burying the handful of entries that said what the job actually
+ * did. And a projection may be dropped and rebuilt at any time, which would
+ * destroy or resurrect a live lease depending on how the rebuild ran — recovery
+ * trusts the lease precisely because nothing else can move it.
+ *
+ * A row exists only while a worker is running. Its absence is what recovery
+ * reads as abandonment, so deleting it is how a worker gives up its claim.
+ *
+ * It deliberately carries no foreign key to `job_worker`. A cascade from a table
+ * that exists to be dropped and rebuilt would destroy live leases on every
+ * rebuild, which is the failure this table was moved out to avoid. The cost is
+ * rows outliving the worker they named; they are read only through a join from
+ * `job_worker`, so an orphan is invisible rather than wrong.
+ */
+export const JobWorkerLeaseTable = sqliteTable("job_worker_lease", {
+  worker_id: text().$type<Job.WorkerID>().primaryKey(),
+  heartbeat_at: integer().notNull(),
+  lease_until: integer().notNull(),
+  ...Timestamps,
+})
 
 /**
  * What a verifier decided, and on what evidence.

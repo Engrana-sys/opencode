@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "cbfb1944-bfb8-42e7-b771-6105a07a5054",
+  "id": "876e533f-0c6b-41ea-a92c-854edac7e749",
   "prevIds": [
-    "b72fe1e1-c0c6-460b-857d-bdc34de8b932"
+    "cbfb1944-bfb8-42e7-b771-6105a07a5054"
   ],
   "ddl": [
     {
@@ -56,6 +56,10 @@
     },
     {
       "name": "job_verification",
+      "entityType": "tables"
+    },
+    {
+      "name": "job_worker_lease",
       "entityType": "tables"
     },
     {
@@ -1300,6 +1304,56 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "worker_id",
+      "entityType": "columns",
+      "table": "job_worker_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "heartbeat_at",
+      "entityType": "columns",
+      "table": "job_worker_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_until",
+      "entityType": "columns",
+      "table": "job_worker_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "job_worker_lease"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "job_worker_lease"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "id",
       "entityType": "columns",
       "table": "job_worker"
@@ -1421,26 +1475,6 @@
       "default": null,
       "generated": null,
       "name": "worktree",
-      "entityType": "columns",
-      "table": "job_worker"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "heartbeat_at",
-      "entityType": "columns",
-      "table": "job_worker"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "lease_until",
       "entityType": "columns",
       "table": "job_worker"
     },
@@ -3104,6 +3138,15 @@
     },
     {
       "columns": [
+        "worker_id"
+      ],
+      "nameExplicit": false,
+      "name": "job_worker_lease_pk",
+      "table": "job_worker_lease",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "id"
       ],
       "nameExplicit": false,
@@ -3413,24 +3456,6 @@
       "where": null,
       "origin": "manual",
       "name": "job_worker_parent_idx",
-      "entityType": "indexes",
-      "table": "job_worker"
-    },
-    {
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false
-        },
-        {
-          "value": "lease_until",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "job_worker_lease_idx",
       "entityType": "indexes",
       "table": "job_worker"
     },

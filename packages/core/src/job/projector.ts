@@ -196,26 +196,16 @@ const layer = Layer.effectDiscard(
           event.data.to === "failed" ||
           event.data.to === "cancelled" ||
           event.data.to === "stale"
-            ? // A settled worker holds no lease; leaving one would make recovery
-              // rediscover work that is already finished.
-              { time_completed: millis(event.data.timestamp), lease_until: null }
+            ? { time_completed: millis(event.data.timestamp) }
             : {}),
-          // A worker leaving `running` releases its lease even when it is going
-          // back to the queue, and carries its backoff with it.
+          // A requeued worker carries its backoff with it.
           ...(event.data.to === "queued"
-            ? {
-                lease_until: null,
-                retry_after: event.data.retryAfter === undefined ? null : millis(event.data.retryAfter),
-              }
+            ? { retry_after: event.data.retryAfter === undefined ? null : millis(event.data.retryAfter) }
             : {}),
-          // The lease is granted by the transition itself, not by the first
-          // heartbeat. Those are two separate durable writes, and in the gap
-          // between them the row reads `running` with no lease — which is
-          // exactly what `JobStore.expired` treats as abandoned. Recovery would
-          // then declare stale a worker whose executor had just started.
-          ...(event.data.to === "running"
-            ? { lease_until: millis(event.data.timestamp) + Job.LEASE_MS, retry_after: null }
-            : {}),
+          // Entering `running` clears any backoff. The lease that comes with
+          // the same transition is granted by `Job.workerStatus` itself, not
+          // here: it is runtime state and must survive a rebuild of this table.
+          ...(event.data.to === "running" ? { retry_after: null } : {}),
           time_updated: millis(event.data.timestamp),
         })
         .where(eq(JobWorkerTable.id, event.data.workerID))
@@ -232,18 +222,12 @@ const layer = Layer.effectDiscard(
         .pipe(Effect.orDie),
     )
 
-    yield* events.project(JobEvent.WorkerHeartbeat, (event) =>
-      db
-        .update(JobWorkerTable)
-        .set({
-          heartbeat_at: millis(event.data.timestamp),
-          lease_until: millis(event.data.leaseUntil),
-          time_updated: millis(event.data.timestamp),
-        })
-        .where(eq(JobWorkerTable.id, event.data.workerID))
-        .run()
-        .pipe(Effect.orDie),
-    )
+    // `JobEvent.WorkerHeartbeat` is deliberately not projected. A lease is
+    // runtime state, not history: it lives in `job_worker_lease`, written
+    // directly by `Job.heartbeat`. The event definition stays in the manifest so
+    // a ledger written before this change still decodes, and its rows now
+    // project nothing, which is right — a lease recorded yesterday says nothing
+    // about what is running today.
 
     yield* events.project(JobEvent.AttemptStarted, (event) =>
       db

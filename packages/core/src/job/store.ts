@@ -15,6 +15,7 @@ import {
   JobStepTable,
   JobTable,
   JobVerificationTable,
+  JobWorkerLeaseTable,
   JobWorkerTable,
 } from "./sql"
 
@@ -71,7 +72,15 @@ const stepFromRow = (row: typeof JobStepTable.$inferSelect): Job.Step => ({
   ...(row.time_completed === null ? {} : { timeCompleted: DateTime.makeUnsafe(row.time_completed) }),
 })
 
-const workerFromRow = (row: typeof JobWorkerTable.$inferSelect): Job.Worker => ({
+/**
+ * The lease is passed in rather than read from the worker row: it lives outside
+ * the projections, so a caller that needs it joins the lease table and a caller
+ * that does not pays nothing.
+ */
+const workerFromRow = (
+  row: typeof JobWorkerTable.$inferSelect,
+  lease?: typeof JobWorkerLeaseTable.$inferSelect | null,
+): Job.Worker => ({
   id: row.id,
   jobID: row.job_id,
   ...(row.step_id === null ? {} : { stepID: row.step_id }),
@@ -87,8 +96,8 @@ const workerFromRow = (row: typeof JobWorkerTable.$inferSelect): Job.Worker => (
   permissions: row.permissions,
   status: row.status,
   ...(row.worktree === null ? {} : { worktree: row.worktree }),
-  ...(row.heartbeat_at === null ? {} : { heartbeatAt: DateTime.makeUnsafe(row.heartbeat_at) }),
-  ...(row.lease_until === null ? {} : { leaseUntil: DateTime.makeUnsafe(row.lease_until) }),
+  ...(lease ? { heartbeatAt: DateTime.makeUnsafe(lease.heartbeat_at) } : {}),
+  ...(lease ? { leaseUntil: DateTime.makeUnsafe(lease.lease_until) } : {}),
   ...(row.retry_after === null ? {} : { retryAfter: DateTime.makeUnsafe(row.retry_after) }),
   usage: usage(row),
   timeCreated: DateTime.makeUnsafe(row.time_created),
@@ -249,23 +258,25 @@ export const layer = Layer.effect(
 
       workers: Effect.fn("JobStore.workers")(function* (jobID) {
         const rows = yield* db
-          .select()
+          .select({ worker: JobWorkerTable, lease: JobWorkerLeaseTable })
           .from(JobWorkerTable)
+          .leftJoin(JobWorkerLeaseTable, eq(JobWorkerTable.id, JobWorkerLeaseTable.worker_id))
           .where(eq(JobWorkerTable.job_id, jobID))
           .orderBy(asc(JobWorkerTable.time_created))
           .all()
           .pipe(Effect.orDie)
-        return rows.map(workerFromRow)
+        return rows.map((row) => workerFromRow(row.worker, row.lease))
       }),
 
       worker: Effect.fn("JobStore.worker")(function* (workerID) {
         const row = yield* db
-          .select()
+          .select({ worker: JobWorkerTable, lease: JobWorkerLeaseTable })
           .from(JobWorkerTable)
+          .leftJoin(JobWorkerLeaseTable, eq(JobWorkerTable.id, JobWorkerLeaseTable.worker_id))
           .where(eq(JobWorkerTable.id, workerID))
           .get()
           .pipe(Effect.orDie)
-        return row ? workerFromRow(row) : undefined
+        return row ? workerFromRow(row.worker, row.lease) : undefined
       }),
 
       attempts: Effect.fn("JobStore.attempts")(function* (workerID) {
@@ -336,25 +347,30 @@ export const layer = Layer.effect(
       expired: Effect.fn("JobStore.expired")(function* (now) {
         const cutoff = DateTime.toEpochMillis(now ?? (yield* DateTime.now))
         const rows = yield* db
-          .select()
+          .select({ worker: JobWorkerTable, lease: JobWorkerLeaseTable })
           .from(JobWorkerTable)
+          .leftJoin(JobWorkerLeaseTable, eq(JobWorkerTable.id, JobWorkerLeaseTable.worker_id))
           .where(inArray(JobWorkerTable.status, [...LIVE_WORKERS]))
           .all()
           .pipe(Effect.orDie)
-        // A live worker with no lease at all has never started one; treat it as
-        // expired too, so nothing claiming to run escapes the recovery scan.
-        return rows.filter((row) => row.lease_until === null || row.lease_until <= cutoff).map(workerFromRow)
+        // No lease row at all means nobody is holding this worker — the process
+        // that would have renewed it died, or never got as far as claiming it.
+        // Either way nothing claiming to run escapes the recovery scan.
+        return rows
+          .filter((row) => row.lease === null || row.lease.lease_until <= cutoff)
+          .map((row) => workerFromRow(row.worker, row.lease))
       }),
 
       running: Effect.fn("JobStore.running")(function* () {
         const rows = yield* db
-          .select({ projectID: JobTable.project_id, worker: JobWorkerTable })
+          .select({ projectID: JobTable.project_id, worker: JobWorkerTable, lease: JobWorkerLeaseTable })
           .from(JobWorkerTable)
           .innerJoin(JobTable, eq(JobWorkerTable.job_id, JobTable.id))
+          .leftJoin(JobWorkerLeaseTable, eq(JobWorkerTable.id, JobWorkerLeaseTable.worker_id))
           .where(eq(JobWorkerTable.status, "running"))
           .all()
           .pipe(Effect.orDie)
-        return rows.map((row) => ({ projectID: row.projectID, worker: workerFromRow(row.worker) }))
+        return rows.map((row) => ({ projectID: row.projectID, worker: workerFromRow(row.worker, row.lease) }))
       }),
     })
   }),

@@ -1,12 +1,15 @@
 export * as JobV2 from "./job"
 
+import { eq } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Job } from "@opencode-ai/schema/job"
 import { JobEvent } from "@opencode-ai/schema/job-event"
+import { Database } from "./database/database"
 import { makeGlobalNode } from "./effect/app-node"
 import { Capability } from "./permission/capability"
 import { EventV2 } from "./event"
 import { JobStore } from "./job/store"
+import { JobWorkerLeaseTable } from "./job/sql"
 import type { JobVerification } from "@opencode-ai/schema/job-verification"
 import type { Permission } from "@opencode-ai/schema/permission"
 import type { ProjectV2 } from "./project"
@@ -246,6 +249,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const store = yield* JobStore.Service
+    const { db } = yield* Database.Service
 
     const require = Effect.fn("Job.require")(function* (jobID: Job.ID) {
       const job = yield* store.get(jobID)
@@ -395,6 +399,32 @@ const layer = Layer.effect(
           ? {}
           : { retryAfter: DateTime.addDuration(now, input.retryAfterMs) }),
       })
+      // The lease is granted and released by the transition itself rather than
+      // by the first heartbeat, so there is no window where a worker reads
+      // `running` holding nothing and recovery reclaims it out from under its
+      // own executor. It is written here and not in the projector because a
+      // projection may be dropped and rebuilt, and a rebuild must not decide
+      // what is running right now.
+      const millis = DateTime.toEpochMillis(now)
+      if (input.to === "running")
+        yield* db
+          .insert(JobWorkerLeaseTable)
+          .values({ worker_id: input.workerID, heartbeat_at: millis, lease_until: millis + Job.LEASE_MS })
+          .onConflictDoUpdate({
+            target: JobWorkerLeaseTable.worker_id,
+            set: { heartbeat_at: millis, lease_until: millis + Job.LEASE_MS },
+          })
+          .run()
+          .pipe(Effect.orDie)
+      // Anything else means this worker is no longer executing: queued and
+      // waiting for a slot, waiting on a person, or finished. Leaving a lease
+      // behind would vouch for work nobody is doing.
+      else
+        yield* db
+          .delete(JobWorkerLeaseTable)
+          .where(eq(JobWorkerLeaseTable.worker_id, input.workerID))
+          .run()
+          .pipe(Effect.orDie)
       return true
     })
 
@@ -408,15 +438,27 @@ const layer = Layer.effect(
       })
     })
 
+    /**
+     * Renews a lease, outside the ledger on purpose.
+     *
+     * This used to append a durable event every thirty seconds per running
+     * worker — some eleven thousand rows a day for four of them, burying the
+     * handful that recorded what the job did. A lease renewal is not a fact
+     * about the work; it is a claim that expires on its own, and the only reader
+     * is recovery deciding whether anyone is still holding it.
+     */
     const heartbeat: Interface["heartbeat"] = Effect.fn("Job.heartbeat")(function* (input) {
-      const worker = yield* requireWorker(input.workerID)
-      const now = yield* DateTime.now
-      yield* events.publish(JobEvent.WorkerHeartbeat, {
-        jobID: worker.jobID,
-        timestamp: now,
-        workerID: input.workerID,
-        leaseUntil: DateTime.addDuration(now, input.leaseMs),
-      })
+      yield* requireWorker(input.workerID)
+      const now = DateTime.toEpochMillis(yield* DateTime.now)
+      yield* db
+        .insert(JobWorkerLeaseTable)
+        .values({ worker_id: input.workerID, heartbeat_at: now, lease_until: now + input.leaseMs })
+        .onConflictDoUpdate({
+          target: JobWorkerLeaseTable.worker_id,
+          set: { heartbeat_at: now, lease_until: now + input.leaseMs },
+        })
+        .run()
+        .pipe(Effect.orDie)
     })
 
     const startAttempt: Interface["startAttempt"] = Effect.fn("Job.startAttempt")(function* (input) {
@@ -528,4 +570,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [EventV2.node, JobStore.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [EventV2.node, JobStore.node, Database.node] })

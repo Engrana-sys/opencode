@@ -12,7 +12,7 @@ import { JobV2 } from "@opencode-ai/core/job"
 import { JobProjector } from "@opencode-ai/core/job/projector"
 import { JobRecovery } from "@opencode-ai/core/job/recovery"
 import { JobRetry } from "@opencode-ai/core/job/retry"
-import { JobWorkerTable } from "@opencode-ai/core/job/sql"
+import { JobWorkerLeaseTable } from "@opencode-ai/core/job/sql"
 import { JobStore } from "@opencode-ai/core/job/store"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -54,9 +54,12 @@ const renewing = makeGlobalNode({
                 const until = DateTime.toEpochMillis(yield* DateTime.now) + Job.LEASE_MS
                 for (const worker of workers)
                   yield* db
-                    .update(JobWorkerTable)
-                    .set({ lease_until: until })
-                    .where(eq(JobWorkerTable.id, worker.id))
+                    .insert(JobWorkerLeaseTable)
+                    .values({ worker_id: worker.id, heartbeat_at: until, lease_until: until })
+                    .onConflictDoUpdate({
+                      target: JobWorkerLeaseTable.worker_id,
+                      set: { heartbeat_at: until, lease_until: until },
+                    })
                     .run()
                     .pipe(Effect.orDie)
               }),
