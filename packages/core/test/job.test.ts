@@ -16,6 +16,7 @@ import {
   JobAttemptTable,
   JobStepTable,
   JobTable,
+  JobVerificationTable,
   JobWorkerTable,
 } from "@opencode-ai/core/job/sql"
 import { PermissionV2 } from "@opencode-ai/core/permission"
@@ -539,33 +540,41 @@ describe("Job projections", () => {
         artifacts: yield* store.artifacts(job.id),
       }
 
-      const ledger = yield* db.select().from(EventTable).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
-
-      // Wipe both the projections and the ledger rows, then feed the serialized
-      // events back in. Projections are a pure function of the ledger, so what
-      // comes back must be identical down to the column.
-      for (const table of [JobArtifactTable, JobAttemptTable, JobWorkerTable, JobStepTable, JobTable])
+      // Drop the projections and nothing else. An earlier version of this test
+      // deleted the ledger too and fed the serialized events back in, which
+      // proved the handlers deterministic and said nothing about the claim the
+      // design rests on — that a projection can be rebuilt from a ledger that is
+      // still there. It passed while that was impossible.
+      for (const table of [
+        JobVerificationTable,
+        JobArtifactTable,
+        JobAttemptTable,
+        JobWorkerTable,
+        JobStepTable,
+        JobTable,
+      ])
         yield* db.delete(table).run().pipe(Effect.orDie)
-      yield* db.delete(EventTable).run().pipe(Effect.orDie)
-      yield* db.delete(EventSequenceTable).run().pipe(Effect.orDie)
       expect(yield* store.get(job.id)).toBeUndefined()
+      // The ledger is untouched, which is the point.
+      expect(yield* db.select().from(EventTable).all().pipe(Effect.orDie)).not.toHaveLength(0)
 
-      yield* events.replayAll(
-        ledger.map((row) => ({
-          id: row.id,
-          type: row.type,
-          seq: row.seq,
-          aggregateID: row.aggregate_id,
-          data: row.data,
-        })),
-        { publish: false },
-      )
+      yield* events.rebuild(job.id)
 
       expect(yield* store.get(job.id)).toEqual(before.job)
       expect(yield* store.steps(job.id)).toEqual(before.steps)
       expect(yield* store.workers(job.id)).toEqual(before.workers)
       expect(yield* store.attempts(worker.id)).toEqual(before.attempts)
       expect(yield* store.artifacts(job.id)).toEqual(before.artifacts)
+
+      // And again over the rebuilt tables, without clearing them. This is what
+      // "handlers are idempotent" actually asserts, and the case the clearing
+      // version above cannot reach: starting from empty, an accumulating
+      // handler adds each amount once and looks correct. Run it a second time
+      // over rows that already hold the total and a running sum doubles it.
+      yield* events.rebuild(job.id)
+      expect(yield* store.get(job.id)).toEqual(before.job)
+      expect(yield* store.workers(job.id)).toEqual(before.workers)
+      expect(yield* store.attempts(worker.id)).toEqual(before.attempts)
     }),
   )
 })

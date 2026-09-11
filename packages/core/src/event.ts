@@ -143,6 +143,11 @@ export interface Interface {
     events: SerializedEvent[],
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
   ) => Effect.Effect<string | undefined>
+  /**
+   * Re-runs the projectors over an aggregate's stored history and returns how
+   * many events were replayed. Reads the ledger; never writes it.
+   */
+  readonly rebuild: (aggregateID: string) => Effect.Effect<number>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
 }
@@ -511,6 +516,46 @@ export const layerWith = (options?: LayerOptions) =>
         })
       }
 
+      /**
+       * Re-runs the projectors over an aggregate's stored history.
+       *
+       * This is what "projections may be dropped and rebuilt" needs and what
+       * `replay` cannot give it. `replay` appends: handed an event the ledger
+       * already holds, it verifies the two match and returns without invoking a
+       * projector, which is right for importing an aggregate twice and useless
+       * for rebuilding one. Feeding a stored ledger back through it over emptied
+       * projection tables is a no-op.
+       *
+       * So this reads instead of writing. Nothing touches `event` or
+       * `event_sequence`, which is what makes it safe to run against a live
+       * ledger, and every handler sees its event exactly as it was appended.
+       *
+       * Handlers must be idempotent for this to be worth having — a rebuild is
+       * the case that proves whether they are.
+       */
+      function rebuild(aggregateID: string) {
+        return Effect.gen(function* () {
+          const rows = yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, aggregateID))
+            .orderBy(asc(EventTable.seq))
+            .all()
+            .pipe(Effect.orDie)
+          for (const row of rows) {
+            const payload = decodeSerializedEvent({
+              id: row.id,
+              type: row.type,
+              seq: row.seq,
+              aggregateID: row.aggregate_id,
+              data: row.data,
+            })
+            for (const projector of projectors.get(payload.type) ?? []) yield* projector(payload)
+          }
+          return rows.length
+        })
+      }
+
       function remove(aggregateID: string) {
         return db
           .transaction(() =>
@@ -628,6 +673,7 @@ export const layerWith = (options?: LayerOptions) =>
         project,
         replay,
         replayAll,
+        rebuild,
         remove,
         claim,
       })

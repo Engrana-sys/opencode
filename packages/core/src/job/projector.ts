@@ -1,6 +1,7 @@
 export * as JobProjector from "./projector"
 
 import { eq, sql } from "drizzle-orm"
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import { DateTime, Effect, Layer } from "effect"
 import { Job } from "@opencode-ai/schema/job"
 import { JobEvent } from "@opencode-ai/schema/job-event"
@@ -31,25 +32,40 @@ import {
 const millis = (value: DateTime.Utc) => DateTime.toEpochMillis(value)
 
 /**
- * Usage rolls up rather than being assigned.
+ * Usage is recomputed from children, never accumulated.
  *
- * A worker's cost is the sum of its attempts, and a job's is the sum of its
- * workers. Adding on settlement keeps that true without re-reading children,
- * and keeps a retried worker's earlier attempts counted rather than forgotten.
+ * A worker's cost is the sum of its attempts and a job's is the sum of its
+ * workers, so both are derivable and neither needs a running total. Adding on
+ * settlement was cheaper and wrong twice over: replaying the ledger counted
+ * every attempt again, which is the one thing a projection handler may not do,
+ * and an attempt settled a second time — a late recovery landing on work that
+ * had already finished — added its usage on top of the amount it was meant to
+ * replace.
+ *
+ * A sum over a handful of attempts costs nothing next to the provider call that
+ * produced them.
  */
-const addUsage = (usage: Job.Usage) => ({
-  tokens_input: sql`${JobTable.tokens_input} + ${usage.tokensInput}`,
-  tokens_output: sql`${JobTable.tokens_output} + ${usage.tokensOutput}`,
-  tokens_cached: sql`${JobTable.tokens_cached} + ${usage.tokensCached}`,
-  cost: sql`${JobTable.cost} + ${usage.cost}`,
-})
+const sumFromAttempts = (workerID: Job.WorkerID) => {
+  const total = (column: AnySQLiteColumn) =>
+    sql`(select coalesce(sum(${column}), 0) from ${JobAttemptTable} where ${JobAttemptTable.worker_id} = ${workerID})`
+  return {
+    tokens_input: total(JobAttemptTable.tokens_input),
+    tokens_output: total(JobAttemptTable.tokens_output),
+    tokens_cached: total(JobAttemptTable.tokens_cached),
+    cost: total(JobAttemptTable.cost),
+  }
+}
 
-const addWorkerUsage = (usage: Job.Usage) => ({
-  tokens_input: sql`${JobWorkerTable.tokens_input} + ${usage.tokensInput}`,
-  tokens_output: sql`${JobWorkerTable.tokens_output} + ${usage.tokensOutput}`,
-  tokens_cached: sql`${JobWorkerTable.tokens_cached} + ${usage.tokensCached}`,
-  cost: sql`${JobWorkerTable.cost} + ${usage.cost}`,
-})
+const sumFromWorkers = (jobID: Job.ID) => {
+  const total = (column: AnySQLiteColumn) =>
+    sql`(select coalesce(sum(${column}), 0) from ${JobWorkerTable} where ${JobWorkerTable.job_id} = ${jobID})`
+  return {
+    tokens_input: total(JobWorkerTable.tokens_input),
+    tokens_output: total(JobWorkerTable.tokens_output),
+    tokens_cached: total(JobWorkerTable.tokens_cached),
+    cost: total(JobWorkerTable.cost),
+  }
+}
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -283,15 +299,17 @@ const layer = Layer.effectDiscard(
           .where(eq(JobAttemptTable.id, event.data.attemptID))
           .run()
           .pipe(Effect.orDie)
+        // Ordered: the attempt row above is what the worker's sum reads, and the
+        // worker's total is what the job's sum reads.
         yield* db
           .update(JobWorkerTable)
-          .set(addWorkerUsage(event.data.usage))
+          .set(sumFromAttempts(event.data.workerID))
           .where(eq(JobWorkerTable.id, event.data.workerID))
           .run()
           .pipe(Effect.orDie)
         yield* db
           .update(JobTable)
-          .set(addUsage(event.data.usage))
+          .set(sumFromWorkers(event.data.jobID))
           .where(eq(JobTable.id, event.data.jobID))
           .run()
           .pipe(Effect.orDie)
