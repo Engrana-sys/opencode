@@ -43,6 +43,24 @@ const sessions = (failure?: string) =>
     } as unknown as SessionV2.Interface),
   )
 
+/** Captures where each session was asked to run, so a test can assert on it. */
+const created: { location?: { directory?: string } }[] = []
+const recording = () => {
+  created.length = 0
+  return Layer.succeed(
+    SessionV2.Service,
+    SessionV2.Service.of({
+      create: (arg: { location?: { directory?: string } }) => {
+        created.push(arg)
+        return Effect.succeed(info)
+      },
+      prompt: () => Effect.void,
+      resume: () => Effect.void,
+      get: () => Effect.succeed(info),
+    } as unknown as SessionV2.Interface),
+  )
+}
+
 const input = {
   job: { directory: "/project", objective: "audit the thing" },
   worker: { id: "wrk_one", role: "fixer", agent: "build" },
@@ -76,5 +94,30 @@ describe("JobExecutorSession.run", () => {
       expect(outcome.exitReason).toBe("success")
       expect(outcome.usage.cost).toBe(3.1)
     }).pipe(Effect.provide(LayerNode.compile(JobExecutorSession.node, [[SessionV2.node, sessions()]]))),
+  )
+
+  effect.effect("runs a worker that owns a worktree inside it", () =>
+    Effect.gen(function* () {
+      const executor = yield* JobExecutor.Service
+      yield* executor.run({
+        ...input,
+        worker: { ...input.worker, worktree: { directory: "/trees/wrk_one" } },
+      } as unknown as JobExecutor.Input)
+
+      // Provisioning a tree and then working somewhere else is worse than not
+      // provisioning one: the ledger records an isolation that never happened,
+      // and two writing workers edit the same files believing otherwise.
+      expect(created[0]?.location?.directory).toBe("/trees/wrk_one")
+    }).pipe(Effect.provide(LayerNode.compile(JobExecutorSession.node, [[SessionV2.node, recording()]]))),
+  )
+
+  effect.effect("leaves a worker with no worktree in the job's checkout", () =>
+    Effect.gen(function* () {
+      const executor = yield* JobExecutor.Service
+      yield* executor.run(input)
+      // A reader has nothing to isolate, and a checkout per reader is a checkout
+      // wasted.
+      expect(created[0]?.location?.directory).toBe("/project")
+    }).pipe(Effect.provide(LayerNode.compile(JobExecutorSession.node, [[SessionV2.node, recording()]]))),
   )
 })

@@ -108,9 +108,15 @@ const layer = Layer.effect(
         // Held outside the attempt so its failure path can still name the
         // session and charge what it spent.
         let sessionID: SessionSchema.ID | undefined
+        // A worker that was given a tree works in it. Anchoring every session in
+        // the shared job directory made the isolation decorative: the scheduler
+        // provisioned a worktree, recorded it in the ledger, and then two writing
+        // workers edited the same files anyway. Readers get no tree and share the
+        // checkout, which is what `undefined` means here.
+        const directory = input.worker.worktree?.directory ?? input.job.directory
         const outcome = yield* Effect.gen(function* () {
           const session = yield* sessions.create({
-            location: { directory: AbsolutePath.make(input.job.directory) },
+            location: { directory: AbsolutePath.make(directory) },
             agent: AgentV2.ID.make(input.worker.agent),
             model,
           })
