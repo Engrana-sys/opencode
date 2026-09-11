@@ -65,9 +65,11 @@ remain to be built. Capability clamping is computed and persisted, but is not
 yet enforced inside the worker session. Nothing currently creates jobs through
 a production path.
 
-Most of the harness was written in one session by one author, whose tests share
-that author's blind spots; only two areas have had an independent review so far.
-[Fork documentation](docs/README.md) records which.
+The harness was written in one session by one author, whose tests share that
+author's blind spots, and has since been audited: seven areas, four lenses each,
+every finding judged by three skeptics told to refute it. Thirty-eight defects
+were fixed as a result. [Fork documentation](docs/README.md) records what was
+covered and what the audit itself missed.
 
 Read [Jobs](docs/jobs.md) for the implemented model and its constraints. The
 [harness architecture](specs/v2/harness.md) and

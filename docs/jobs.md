@@ -29,8 +29,18 @@ Nothing writes a job's state directly. Every fact is an event appended to the
 
 That has three consequences worth internalising:
 
-1. **The projections are disposable.** Drop all five, replay the ledger, and they
-   come back identical. There is a test that does exactly this.
+1. **The projections are disposable.** Drop them, call `rebuild`, and they come
+   back identical. `rebuild` re-runs the projectors over the stored events
+   without touching the ledger — which is a different operation from `replay`,
+   and the distinction is load-bearing: `replay` appends, and when handed an
+   event the ledger already holds it verifies the two match and returns without
+   invoking a projector. Feeding a stored ledger back through `replay` rebuilds
+   nothing.
+
+   The test that covers this rebuilds twice: once over emptied tables, and once
+   more over the restored rows without clearing them. Only the second pass
+   asserts idempotence — starting from empty, a handler that accumulates adds
+   each amount once and looks correct.
 2. **History is never overwritten.** A retried worker gains an attempt rather
    than mutating the previous one, so a run that failed on a network error and
    succeeded after it keeps both halves. A terminal job stays terminal —
@@ -118,16 +128,25 @@ cannot be trusted for this, because the process that would have corrected it is
 the one that died. **The lease can**, because it expires on its own.
 
 So a running worker holds a lease. **The transition into `running` grants it**,
-and the heartbeat only renews it — because those are two separate durable
-writes, and a lease granted by the first heartbeat would leave a gap where the
-row reads `running` with no lease at all. That gap is exactly what recovery
-treats as abandoned, so a scan landing inside it would declare stale a worker
-whose executor had just started.
+and the heartbeat only renews it — because those are two separate writes, and a
+lease granted by the first heartbeat would leave a gap where the worker reads
+`running` with no lease at all. That gap is exactly what recovery treats as
+abandoned, so a scan landing inside it would declare stale a worker whose
+executor had just started.
 
 The heartbeat runs inside the attempt's own scope: when the attempt ends the
 scope closes and the heartbeat stops with it. A lease can never outlive the work
 it vouches for. What makes a worker abandoned is therefore that **nothing
 renewed** its lease, not that it never had one.
+
+**A lease is not in the ledger, and not in a projection.** It lives in its own
+table for two reasons. It is not a fact about the work — it is a claim that
+expires on its own — and recording every renewal put some eleven thousand rows a
+day into `event` for four workers, burying the handful that said what the job
+did. And a projection may be dropped and rebuilt at any moment; rebuilding one
+that carried the lease would either wipe a live claim or resurrect an expired
+one from a heartbeat recorded hours ago. Recovery can trust the lease only
+because nothing else can move it.
 
 Queued and `waiting_input` workers hold no lease. Neither is executing anything a
 dying process could abandon — one waits for a slot, the other for a person who
@@ -142,7 +161,9 @@ disposition is whether the dead worker could have left changes behind:
 
 ## Isolation
 
-A worker that writes gets its own git worktree and a branch named after it.
+A worker that writes gets its own git worktree and a branch named after it, and
+**runs inside it** — the session is anchored there rather than in the job's
+shared checkout.
 Readers share the project checkout — a scout that only greps has nothing to
 isolate, and a checkout per scout is a checkout wasted.
 
@@ -170,6 +191,16 @@ where the last match wins. What is intersected is the **decision**: evaluate the
 same action and resource against every ruleset in the chain and keep the most
 restrictive answer. The child's ruleset is then rewritten so ordinary evaluation
 reaches that answer with no further ceremony.
+
+That rewrite is three layers, and the order is the mechanism: the parent's rules,
+then the child's capped rule by rule, then **the parent's restrictions again,
+last**. Capping alone is not enough, because it asks the parent about the child
+rule's *pattern* as though the pattern were a resource — and a parent denying
+`rm *` does not match the literal string `*`. Without the final layer a child
+asking broadly reaches straight past a narrow denial: the parent says no to
+`rm -rf /` and the clamped ruleset says yes. The parent's permissions are not
+re-appended, only its `deny` and `ask`, since re-adding them would undo the
+narrowing a child is entitled to make.
 
 The clamp happens inside `createWorker`, not at the call site. An invariant that
 depends on every caller remembering it is not an invariant.
@@ -204,9 +235,16 @@ silently override the narrow rule that exists to stop exactly that.
 
 ## Current state
 
-Working: the job aggregate and ledger, projections with a replay test, the
-scheduler with a rolling pool, per-invocation models, worktrees, capability
-clamping, recovery, budgets and the verifier. Attempts run as sessions.
+Working: the job aggregate and ledger, projections that rebuild from it,
+the scheduler with a rolling pool, per-invocation models, worktrees that workers
+actually run in, capability clamping, recovery, budgets and the verifier.
+Attempts run as sessions, and verdicts are projected rather than buried.
+
+Three of those lines were untrue until an audit said so. Worktrees were
+provisioned and unused, the clamp let a child reach past a narrow denial, and
+"projections can be rebuilt" had no code path — with a test that passed because
+it deleted the ledger along with the projections. Each is fixed, with a test
+that fails when the fix is reverted.
 
 Not built: sandbox backends, the workflow engine and human gates, the jobs TUI
 and public API, and context/memory. **Nothing creates jobs in a production path

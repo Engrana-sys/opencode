@@ -87,17 +87,37 @@ tests were written by that same author.** Tests like that share the author's
 blind spots — a passing suite proves the code does what its author believed it
 should, which is a weaker claim than it looks.
 
+It has now had that review. Seven areas were read by independent agents, hunted
+through four lenses each — correctness, concurrency, durability and replay,
+security and escape — and every candidate finding was judged by three skeptics
+whose instructions were to refute it. **Thirty-four survived that.** A
+completeness critic, asked what a per-area hunt structurally cannot see, found
+**four more** in the one file no area covered. All thirty-eight are fixed, each
+with a test that fails when the fix is reverted.
+
+One finding survived three skeptics and was still wrong: a cascading delete said
+to destroy the job projections, where nothing in the repository deletes the
+parent row at all. It is recorded as a hazard and left alone. Three skeptics
+agreeing is evidence, not proof.
+
 | Area | Review state |
 | --- | --- |
-| `job/projector.ts` — the wall-clock start time | Reviewed independently; a defect was found and fixed |
-| `job/projector.ts`, `job/store.ts` — the lease window | Reviewed independently; a defect was found and fixed |
-| Everything else in the harness | **Not independently reviewed** |
+| Ledger, domain, projections | Audited; defects found and fixed |
+| Job service and transitions | Audited; defects found and fixed |
+| Scheduler, admission, retry, budget | Audited; defects found and fixed |
+| Recovery and leases | Audited; defects found and fixed |
+| Executors and worktrees | Audited; defects found and fixed |
+| Verifier and capability clamping | Audited; defects found and fixed |
+| Session goal, loop and context | Audited; defects found and fixed |
+| Sandbox backends, workflow engine, jobs API | Not written yet, so not reviewed |
 
-Both fixed defects were the same shape: a comment describing an invariant the
-code did not implement. The start time was re-stamped on every entry into
-`running` though its comment said "first"; the lease was granted one durable
-write after the status that required it. Neither showed up in the suite, because
-the tests encoded the same assumption as the code.
+Almost every defect had the same shape: **a comment describing an invariant the
+code did not implement.** Worktrees were provisioned and never entered. The
+permission clamp let a child reach past a narrow denial. The wall-clock budget
+reset itself. And the test asserting that projections rebuild from the ledger
+deleted the ledger too, so it passed while rebuilding was impossible.
 
-A wider audit — seven areas, four lenses each, adversarially verified — is
-planned but has not yet completed a run.
+None of that showed up in the suite, because the tests encoded the same
+assumptions as the code. That is the argument for the audit, and the reason the
+finding that mattered most was a test rather than a function.
+

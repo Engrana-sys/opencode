@@ -29,10 +29,17 @@ These hold from the first commit and are never traded for progress. Each is
 written so a test can fail on it.
 
 1. **The ledger is append-only.** Nothing updates or deletes a row in `event`.
-   State lives in projections, which may be dropped and rebuilt at any time.
+   State lives in projections, which may be dropped and rebuilt at any time —
+   through `EventV2.rebuild`, which re-runs the projectors over stored events
+   without touching the ledger. `replay` does not do this and cannot: handed an
+   event already stored, it verifies and returns before reaching a projector.
+   Runtime state that must survive a rebuild — a worker's lease — is therefore
+   not in a projection at all.
 2. **Projections are replayable.** Every projection handler is idempotent or
    keyed by an identifier the event carries. Replaying an event twice produces
-   the same rows.
+   the same rows. The test for this must rebuild **over rows that already hold
+   the result**, not only over emptied tables: from empty, a handler that
+   accumulates adds each amount once and looks correct.
 3. **History is never overwritten.** A retried worker gains an attempt; it does
    not mutate the previous one. A terminal job stays terminal — re-running means
    a new job.
@@ -40,9 +47,14 @@ written so a test can fail on it.
    Every divergence emits an event naming what was asked for, what ran, and why.
 5. **Permissions intersect, never union.** A child's effective permissions are
    the intersection of its parent's effective set, its own request, and the
-   workflow's grant. Widening requires explicit human approval.
-6. **A worker writing to disk owns a worktree.** Read-only workers share the base
-   checkout. Two writing workers never share a directory.
+   workflow's grant. Widening requires explicit human approval. Capping a child's
+   rules is not sufficient on its own — a cap asks the parent about the child's
+   *pattern* as though it were a resource — so the parent's restrictions are
+   re-applied last, where evaluation's `findLast` makes them final.
+6. **A worker writing to disk owns a worktree, and runs in it.** Read-only workers
+   share the base checkout. Two writing workers never share a directory. Owning
+   a tree the session never enters is the same defect as having no tree, and
+   harder to notice.
 7. **Every live worker holds a lease, from the moment it is live.** The
    transition into `running` grants the lease; the heartbeat only renews it. An
    invariant that holds everywhere except between two durable writes is not an
@@ -94,7 +106,9 @@ attempts, and settled; dropping the five projection tables and replaying the
 ledger reproduces them exactly.
 
 **Verify.** Unit tests over transitions (legal ones succeed, illegal ones fail),
-plus a replay test that truncates projections, replays, and diffs the result.
+plus a rebuild test that truncates the projections, calls `rebuild`, and diffs
+the result — then rebuilds again over the restored rows, which is the pass that
+actually catches a handler that accumulates.
 
 ## Phase 2 — Background fleet *(landed)*
 
