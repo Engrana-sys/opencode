@@ -3,6 +3,7 @@ import { Timestamps } from "../database/schema.sql"
 import { ProjectTable } from "../project/sql"
 import { ProjectV2 } from "../project"
 import type { Job } from "@opencode-ai/schema/job"
+import type { JobVerification } from "@opencode-ai/schema/job-verification"
 import type { Permission } from "@opencode-ai/schema/permission"
 import type { SessionSchema } from "../session/schema"
 import * as DatabasePath from "../database/path"
@@ -163,4 +164,35 @@ export const JobArtifactTable = sqliteTable(
     ...Timestamps,
   },
   (table) => [index("job_artifact_job_idx").on(table.job_id), index("job_artifact_worker_idx").on(table.worker_id)],
+)
+
+/**
+ * What a verifier decided, and on what evidence.
+ *
+ * Keyed by the ledger event's own id rather than a generated one, because that
+ * is what makes the handler idempotent: replaying the ledger writes the same row
+ * back instead of a second copy of the same verdict.
+ *
+ * `results` is stored whole rather than normalised into a row per check. A
+ * verdict is read as a unit — a check that could not run is only meaningful
+ * beside the ones that did — and nothing queries individual checks.
+ */
+export const JobVerificationTable = sqliteTable(
+  "job_verification",
+  {
+    id: text().primaryKey(),
+    job_id: text()
+      .$type<Job.ID>()
+      .notNull()
+      .references(() => JobTable.id, { onDelete: "cascade" }),
+    worker_id: text().$type<Job.WorkerID>(),
+    step_id: text().$type<Job.StepID>(),
+    verdict: text().$type<JobVerification.Verdict>().notNull(),
+    results: text({ mode: "json" }).$type<ReadonlyArray<JobVerification.Result>>().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("job_verification_job_idx").on(table.job_id),
+    index("job_verification_worker_idx").on(table.worker_id),
+  ],
 )

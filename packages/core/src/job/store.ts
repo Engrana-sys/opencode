@@ -3,12 +3,20 @@ export * as JobStore from "./store"
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer } from "effect"
 import { Job } from "@opencode-ai/schema/job"
+import type { JobVerification } from "@opencode-ai/schema/job-verification"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { EventTable } from "../event/sql"
 import { ProjectV2 } from "../project"
-import { JobArtifactTable, JobAttemptTable, JobStepTable, JobTable, JobWorkerTable } from "./sql"
+import {
+  JobArtifactTable,
+  JobAttemptTable,
+  JobStepTable,
+  JobTable,
+  JobVerificationTable,
+  JobWorkerTable,
+} from "./sql"
 
 /**
  * Reads the job projections.
@@ -145,6 +153,8 @@ export interface Interface {
   /** Attempts of one worker, oldest first, so the retry history reads in order. */
   readonly attempts: (workerID: Job.WorkerID) => Effect.Effect<ReadonlyArray<Job.Attempt>>
   readonly artifacts: (jobID: Job.ID) => Effect.Effect<ReadonlyArray<Job.Artifact>>
+  /** Every verdict recorded against the job, oldest first. */
+  readonly verifications: (jobID: Job.ID) => Effect.Effect<ReadonlyArray<JobVerification.Info>>
   /** The job's own ledger entries, in the order they were appended. */
   readonly timeline: (jobID: Job.ID, after?: number) => Effect.Effect<ReadonlyArray<EventV2.Payload>>
   /** Live workers whose lease has lapsed. Recovery treats these as abandoned. */
@@ -278,6 +288,24 @@ export const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         return rows.map(artifactFromRow)
+      }),
+
+      verifications: Effect.fn("JobStore.verifications")(function* (jobID) {
+        const rows = yield* db
+          .select()
+          .from(JobVerificationTable)
+          .where(eq(JobVerificationTable.job_id, jobID))
+          .orderBy(asc(JobVerificationTable.time_created))
+          .all()
+          .pipe(Effect.orDie)
+        return rows.map((row) => ({
+          jobID: row.job_id,
+          ...(row.worker_id === null ? {} : { workerID: row.worker_id }),
+          ...(row.step_id === null ? {} : { stepID: row.step_id }),
+          verdict: row.verdict,
+          results: row.results,
+          timeCreated: DateTime.makeUnsafe(row.time_created),
+        }))
       }),
 
       timeline: Effect.fn("JobStore.timeline")(function* (jobID, after) {

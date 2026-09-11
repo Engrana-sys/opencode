@@ -45,5 +45,6 @@ export const migrations = (
     import("./migration/20260908095548_worker_requested_model"),
     import("./migration/20260908100044_worker_retry_after"),
     import("./migration/20260908101054_worker_permissions"),
+    import("./migration/20260911193317_job_verification"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

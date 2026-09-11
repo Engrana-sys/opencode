@@ -8,7 +8,14 @@ import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { ProjectV2 } from "../project"
-import { JobArtifactTable, JobAttemptTable, JobStepTable, JobTable, JobWorkerTable } from "./sql"
+import {
+  JobArtifactTable,
+  JobAttemptTable,
+  JobStepTable,
+  JobTable,
+  JobVerificationTable,
+  JobWorkerTable,
+} from "./sql"
 
 /**
  * Builds the job read models from the ledger.
@@ -305,6 +312,28 @@ const layer = Layer.effectDiscard(
           path: event.data.path ?? null,
           mime: event.data.mime ?? null,
           bytes: event.data.bytes ?? null,
+          time_created: millis(event.data.timestamp),
+          time_updated: millis(event.data.timestamp),
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie),
+    )
+
+    // Keyed by the event's own id, the one identifier a verdict carries that is
+    // stable across a replay. Without a projection at all, a recorded verdict
+    // was readable only by decoding raw ledger rows — a hole in "state lives in
+    // projections" exactly where the verifier's output lands.
+    yield* events.project(JobEvent.Verified, (event) =>
+      db
+        .insert(JobVerificationTable)
+        .values({
+          id: event.id,
+          job_id: event.data.jobID,
+          worker_id: event.data.workerID ?? null,
+          step_id: event.data.stepID ?? null,
+          verdict: event.data.verdict,
+          results: event.data.results,
           time_created: millis(event.data.timestamp),
           time_updated: millis(event.data.timestamp),
         })

@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "b72fe1e1-c0c6-460b-857d-bdc34de8b932",
+  "id": "cbfb1944-bfb8-42e7-b771-6105a07a5054",
   "prevIds": [
-    "d9399280-4853-4b4d-bf4e-53f807aa06ff"
+    "b72fe1e1-c0c6-460b-857d-bdc34de8b932"
   ],
   "ddl": [
     {
@@ -52,6 +52,10 @@
     },
     {
       "name": "job",
+      "entityType": "tables"
+    },
+    {
+      "name": "job_verification",
       "entityType": "tables"
     },
     {
@@ -1209,6 +1213,86 @@
       "name": "time_updated",
       "entityType": "columns",
       "table": "job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "job_id",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "worker_id",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "step_id",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "verdict",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "results",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "job_verification"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "job_verification"
     },
     {
       "type": "text",
@@ -2681,6 +2765,21 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_job_verification_job_id_job_id_fk",
+      "entityType": "fks",
+      "table": "job_verification"
+    },
+    {
+      "columns": [
+        "job_id"
+      ],
+      "tableTo": "job",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_job_worker_job_id_job_id_fk",
       "entityType": "fks",
       "table": "job_worker"
@@ -2999,6 +3098,15 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "job_verification_pk",
+      "table": "job_verification",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "job_worker_pk",
       "table": "job_worker",
       "entityType": "pks"
@@ -3251,6 +3359,34 @@
       "name": "job_status_idx",
       "entityType": "indexes",
       "table": "job"
+    },
+    {
+      "columns": [
+        {
+          "value": "job_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "job_verification_job_idx",
+      "entityType": "indexes",
+      "table": "job_verification"
+    },
+    {
+      "columns": [
+        {
+          "value": "worker_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "job_verification_worker_idx",
+      "entityType": "indexes",
+      "table": "job_verification"
     },
     {
       "columns": [

@@ -295,6 +295,35 @@ describe("Job", () => {
     }),
   )
 
+  it.effect("a recorded verdict is readable without decoding the ledger", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
+      const job = yield* newJob()
+      const worker = yield* jobs.createWorker({ jobID: job.id, role: "fixer", agent: "fixer", requested: model("mistral", "codestral") })
+
+      yield* jobs.recordVerification({
+        jobID: job.id,
+        workerID: worker.id,
+        verdict: "unverified",
+        results: [
+          { name: "tests", outcome: "passed", detail: "1211 pass" },
+          { name: "lint", outcome: "errored", detail: "oxlint not found" },
+        ],
+      })
+
+      // `unverified` is the whole reason this is worth projecting: a verdict
+      // that is neither a pass nor a failure is only legible beside the checks
+      // that produced it.
+      const recorded = yield* store.verifications(job.id)
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0].verdict).toBe("unverified")
+      expect(recorded[0].workerID).toBe(worker.id)
+      expect(recorded[0].results.map((result) => result.outcome)).toEqual(["passed", "errored"])
+    }),
+  )
+
   it.effect("only one caller can claim a queued worker", () =>
     Effect.gen(function* () {
       yield* setup

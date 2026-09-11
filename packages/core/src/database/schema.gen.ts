@@ -172,6 +172,19 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`job_verification\` (
+          \`id\` text PRIMARY KEY,
+          \`job_id\` text NOT NULL,
+          \`worker_id\` text,
+          \`step_id\` text,
+          \`verdict\` text NOT NULL,
+          \`results\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_job_verification_job_id_job_id_fk\` FOREIGN KEY (\`job_id\`) REFERENCES \`job\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`job_worker\` (
           \`id\` text PRIMARY KEY,
           \`job_id\` text NOT NULL,
@@ -387,6 +400,8 @@ export default {
       yield* tx.run(`CREATE INDEX \`job_step_job_position_idx\` ON \`job_step\` (\`job_id\`,\`position\`);`)
       yield* tx.run(`CREATE INDEX \`job_project_status_idx\` ON \`job\` (\`project_id\`,\`status\`);`)
       yield* tx.run(`CREATE INDEX \`job_status_idx\` ON \`job\` (\`status\`);`)
+      yield* tx.run(`CREATE INDEX \`job_verification_job_idx\` ON \`job_verification\` (\`job_id\`);`)
+      yield* tx.run(`CREATE INDEX \`job_verification_worker_idx\` ON \`job_verification\` (\`worker_id\`);`)
       yield* tx.run(`CREATE INDEX \`job_worker_job_idx\` ON \`job_worker\` (\`job_id\`);`)
       yield* tx.run(`CREATE INDEX \`job_worker_parent_idx\` ON \`job_worker\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`job_worker_lease_idx\` ON \`job_worker\` (\`status\`,\`lease_until\`);`)
