@@ -95,47 +95,46 @@ describe("Capability.widens", () => {
   })
 })
 
-describe("Capability.clamp", () => {
-  it("produces a ruleset that ordinary evaluation can use unchanged", () => {
-    // The clamped set has to be safe on its own: a rule that must be remembered
-    // separately is a rule that gets forgotten at the call site.
-    const clamped = Capability.clamp({ parent: denyBash, child: allowBash })
-    expect(PermissionV2.evaluate("bash", "*", clamped).effect).toBe("deny")
-  })
-
-  it("keeps what the parent allowed and the child did not mention", () => {
-    const clamped = Capability.clamp({ parent: allowAll, child: [rule("bash", "*", "deny")] })
-    expect(PermissionV2.evaluate("read", "*", clamped).effect).toBe("allow")
-    // The child's own tightening survives.
-    expect(PermissionV2.evaluate("bash", "*", clamped).effect).toBe("deny")
-  })
-
+describe("a chain, not a flattened ruleset", () => {
+  /**
+   * These replace the tests for a `clamp` that produced one ruleset from two.
+   * It could not be made sound: two ordered wildcard rulesets have no
+   * intersection expressible as a third, and every ordering traded one hole for
+   * another. Evaluating the chain per query has neither problem.
+   */
   it("a child cannot re-open a resource its parent closed", () => {
     const parent: Permission.Ruleset = [rule("edit", "*", "allow"), rule("edit", "/etc/**", "deny")]
-    const clamped = Capability.clamp({ parent, child: [rule("edit", "/etc/passwd", "allow")] })
-    expect(PermissionV2.evaluate("edit", "/etc/passwd", clamped).effect).toBe("deny")
-    expect(PermissionV2.evaluate("edit", "/src/a.ts", clamped).effect).toBe("allow")
+    const child: Permission.Ruleset = [rule("edit", "/etc/passwd", "allow")]
+    expect(Capability.effective({ action: "edit", resource: "/etc/passwd", chain: [parent, child] })).toBe("deny")
+    expect(Capability.effective({ action: "edit", resource: "/src/a.ts", chain: [parent, child] })).toBe("allow")
   })
 
   it("a child cannot reach past a narrow denial by asking broadly", () => {
-    // The mirror of the test above, and the harder half. Capping a child rule
-    // asks the parent about the child's *pattern* as though it were a resource,
-    // and `rm *` does not match the literal string `*` — so the cap sees no
-    // objection and the broad child rule, sitting last, would otherwise win.
+    // The case a per-rule cap cannot catch: capping asks the parent about the
+    // child's *pattern*, and `rm *` does not match the literal string `*`.
     const parent: Permission.Ruleset = [rule("bash", "*", "allow"), rule("bash", "rm *", "deny")]
-    const clamped = Capability.clamp({ parent, child: [rule("bash", "*", "allow")] })
-    expect(PermissionV2.evaluate("bash", "rm -rf /", parent).effect).toBe("deny")
-    expect(PermissionV2.evaluate("bash", "rm -rf /", clamped).effect).toBe("deny")
-    // And the delegation is still worth having: everything else still runs.
-    expect(PermissionV2.evaluate("bash", "ls", clamped).effect).toBe("allow")
+    const child: Permission.Ruleset = [rule("bash", "*", "allow")]
+    expect(Capability.effective({ action: "bash", resource: "rm -rf /", chain: [parent, child] })).toBe("deny")
+    expect(Capability.effective({ action: "bash", resource: "ls", chain: [parent, child] })).toBe("allow")
   })
 
-  it("an ask the parent imposed is not downgraded by a broad child allow", () => {
-    // `ask` is a restriction too. A child that allows everything must still stop
-    // at a question its parent wanted asked.
-    const parent: Permission.Ruleset = [rule("*", "*", "allow"), rule("webfetch", "*", "ask")]
-    const clamped = Capability.clamp({ parent, child: [rule("*", "*", "allow")] })
-    expect(PermissionV2.evaluate("webfetch", "https://example.com", clamped).effect).toBe("ask")
-    expect(PermissionV2.evaluate("read", "/src/a.ts", clamped).effect).toBe("allow")
+  it("a parent's own exceptions survive having a child", () => {
+    // What flattening broke: re-appending the parent's broad denial after its
+    // own narrower allow made every child stricter than its parent, so a chain
+    // with an empty child was not the parent.
+    const parent: Permission.Ruleset = [rule("bash", "*", "deny"), rule("bash", "ls *", "allow")]
+    expect(Capability.effective({ action: "bash", resource: "ls -la", chain: [parent] })).toBe("allow")
+    expect(Capability.effective({ action: "bash", resource: "ls -la", chain: [parent, []] })).toBe("allow")
+    expect(Capability.effective({ action: "bash", resource: "rm -rf /", chain: [parent, []] })).toBe("deny")
+  })
+
+  it("a child can deny what its parent only asks about", () => {
+    // The other half flattening broke: the parent's `ask`, re-appended last,
+    // overrode the child's own denial. Narrowing is a child's prerogative.
+    const parent: Permission.Ruleset = [rule("*", "*", "allow"), rule("bash", "*", "ask")]
+    const child: Permission.Ruleset = [rule("bash", "rm *", "deny")]
+    expect(Capability.effective({ action: "bash", resource: "rm -rf /", chain: [parent, child] })).toBe("deny")
+    expect(Capability.effective({ action: "bash", resource: "ls", chain: [parent, child] })).toBe("ask")
+    expect(Capability.effective({ action: "read", resource: "/src/a.ts", chain: [parent, child] })).toBe("allow")
   })
 })

@@ -32,18 +32,25 @@ export const restrict = (left: Permission.Effect, right: Permission.Effect): Per
  * The effect for one action and resource across a whole chain of rulesets,
  * ordered from the outermost ancestor to the worker itself.
  *
- * An empty chain is `ask` rather than `allow`: an unknown authority is not a
- * permissive one.
+ * A ruleset with no rule for this action and resource has no opinion and is
+ * skipped, rather than counting as `ask`. That is what makes inheritance work:
+ * a child naming one resource would otherwise silently put a question mark over
+ * everything else its parent had already allowed. Only the rulesets that
+ * actually speak are intersected, and the most restrictive of them wins.
+ *
+ * If nobody speaks — an empty chain, or a chain where no ruleset matches — the
+ * answer is `ask`. An unknown authority is not a permissive one.
  */
 export const effective = (input: {
   readonly action: string
   readonly resource: string
   readonly chain: ReadonlyArray<Permission.Ruleset>
 }): Permission.Effect => {
-  if (input.chain.length === 0) return "ask"
-  return input.chain
-    .map((ruleset) => PermissionV2.evaluate(input.action, input.resource, ruleset).effect)
-    .reduce(restrict)
+  const spoken = input.chain
+    .map((ruleset) => PermissionV2.match(input.action, input.resource, ruleset)?.effect)
+    .filter((effect): effect is Permission.Effect => effect !== undefined)
+  if (spoken.length === 0) return "ask"
+  return spoken.reduce(restrict)
 }
 
 /**
@@ -63,40 +70,3 @@ export const widens = (input: {
   const child = PermissionV2.evaluate(input.action, input.resource, input.child).effect
   return RANK[child] < RANK[parent]
 }
-
-/**
- * Rewrites a child's ruleset so it can never exceed its parent.
- *
- * The result is a ruleset that can be handed to ordinary evaluation with no
- * further ceremony — which matters, because a rule that has to be remembered is
- * a rule that gets forgotten. Getting there takes three layers, and the order is
- * the whole mechanism:
- *
- * 1. **The parent's rules**, so anything the child does not mention still falls
- *    under them.
- * 2. **The child's rules**, capped rule by rule, so the child can narrow what it
- *    was given.
- * 3. **The parent's restrictions again, last.** `PermissionV2.evaluate` resolves
- *    by `findLast`, so whatever sits at the end has the final word. Without this
- *    layer a child rule that is merely *broader* than the parent's denial wins
- *    over it: a parent denying `rm *` and allowing everything else, given a
- *    child that allows `*`, would permit `rm -rf /`. The per-rule cap in layer 2
- *    cannot catch that on its own, because it asks the parent about the child's
- *    pattern as though the pattern were a concrete resource, and `rm *` does not
- *    match the literal string `*`.
- *
- * A rule that only ever loosens is not a restriction, which is why layer 3 keeps
- * `deny` and `ask` and drops `allow`: re-appending the parent's permissions would
- * undo the narrowing the child is entitled to make.
- */
-export const clamp = (input: {
-  readonly parent: Permission.Ruleset
-  readonly child: Permission.Ruleset
-}): Permission.Ruleset => [
-  ...input.parent,
-  ...input.child.map((rule) => ({
-    ...rule,
-    effect: restrict(rule.effect, PermissionV2.evaluate(rule.action, rule.resource, input.parent).effect),
-  })),
-  ...input.parent.filter((rule) => rule.effect !== "allow"),
-]

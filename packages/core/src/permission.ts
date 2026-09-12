@@ -73,16 +73,22 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
 
 export type Error = BlockedError | CorrectedError
 
+/**
+ * The rule that decides this action and resource, or nothing if none does.
+ *
+ * Kept apart from `evaluate` because "no rule mentions this" and "a rule says
+ * ask" are different facts, and only one of them can be inherited from. Within a
+ * single ruleset the distinction does not matter; across a chain it decides
+ * whether a child that stays silent defers to its parent or overrides it.
+ */
+export function match(action: string, resource: string, ...rulesets: Permission.Ruleset[]): Permission.Rule | undefined {
+  return rulesets
+    .flat()
+    .findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource))
+}
+
 export function evaluate(action: string, resource: string, ...rulesets: Permission.Ruleset[]): Permission.Rule {
-  return (
-    rulesets
-      .flat()
-      .findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)) ?? {
-      action,
-      resource: "*",
-      effect: "ask",
-    }
-  )
+  return match(action, resource, ...rulesets) ?? { action, resource: "*", effect: "ask" }
 }
 
 export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {

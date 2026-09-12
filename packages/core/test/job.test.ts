@@ -19,7 +19,7 @@ import {
   JobVerificationTable,
   JobWorkerTable,
 } from "@opencode-ai/core/job/sql"
-import { PermissionV2 } from "@opencode-ai/core/permission"
+import { Capability } from "@opencode-ai/core/permission/capability"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -273,17 +273,18 @@ describe("Job", () => {
     Effect.gen(function* () {
       yield* setup
       const jobs = yield* JobV2.Service
+      const store = yield* JobStore.Service
       const job = yield* newJob()
       const parent = yield* jobs.createWorker({
         jobID: job.id,
         role: "planner",
         agent: "planner",
         requested: model("mistral", "codestral"),
-        permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+        permissions: [
+          { action: "bash", resource: "*", effect: "allow" },
+          { action: "bash", resource: "rm *", effect: "deny" },
+        ],
       })
-
-      // The escalation this closes: a worker denied bash spawning a child whose
-      // own agent allows it. The service clamps rather than trusting the caller.
       const child = yield* jobs.createWorker({
         jobID: job.id,
         role: "helper",
@@ -292,7 +293,18 @@ describe("Job", () => {
         parentID: parent.id,
         permissions: [{ action: "bash", resource: "*", effect: "allow" }],
       })
-      expect(PermissionV2.evaluate("bash", "*", child.permissions).effect).toBe("deny")
+
+      // Stored as asked for. Flattening the two into one ruleset is what could
+      // not be made sound, so the guarantee lives in the chain instead.
+      expect(child.permissions).toEqual([{ action: "bash", resource: "*", effect: "allow" }])
+
+      const chain = yield* store.chain(child.id)
+      expect(chain).toHaveLength(2)
+      // The escalation this closes: a child asking broadly to reach past a
+      // denial its parent wrote narrowly.
+      expect(Capability.effective({ action: "bash", resource: "rm -rf /", chain })).toBe("deny")
+      // And delegation still delegates.
+      expect(Capability.effective({ action: "bash", resource: "ls", chain })).toBe("allow")
     }),
   )
 

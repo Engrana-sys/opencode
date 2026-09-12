@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gt, inArray } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer } from "effect"
 import { Job } from "@opencode-ai/schema/job"
 import type { JobVerification } from "@opencode-ai/schema/job-verification"
+import type { Permission } from "@opencode-ai/schema/permission"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
@@ -162,6 +163,16 @@ export interface Interface {
   /** Attempts of one worker, oldest first, so the retry history reads in order. */
   readonly attempts: (workerID: Job.WorkerID) => Effect.Effect<ReadonlyArray<Job.Attempt>>
   readonly artifacts: (jobID: Job.ID) => Effect.Effect<ReadonlyArray<Job.Artifact>>
+  /**
+   * A worker's permission chain, outermost ancestor first, its own last.
+   *
+   * Ordered this way because that is what `Capability.effective` expects: it
+   * evaluates one action and resource against every ruleset and keeps the most
+   * restrictive answer, so nothing here is flattened and no ruleset can be
+   * overridden by a later one. Bounded by `Job.MAX_DEPTH`, so this is at most a
+   * handful of rows.
+   */
+  readonly chain: (workerID: Job.WorkerID) => Effect.Effect<ReadonlyArray<Permission.Ruleset>>
   /** Every verdict recorded against the job, oldest first. */
   readonly verifications: (jobID: Job.ID) => Effect.Effect<ReadonlyArray<JobVerification.Info>>
   /** The job's own ledger entries, in the order they were appended. */
@@ -299,6 +310,26 @@ export const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         return rows.map(artifactFromRow)
+      }),
+
+      chain: Effect.fn("JobStore.chain")(function* (workerID) {
+        const rulesets: Permission.Ruleset[] = []
+        let id: Job.WorkerID | undefined = workerID
+        // Walking up rather than storing the chain: a worker's ancestry is
+        // already in the ledger, and a copy would be a second truth to keep in
+        // step. The depth limit is what makes the walk bounded.
+        for (let step = 0; id !== undefined && step <= Job.MAX_DEPTH + 1; step++) {
+          const row: typeof JobWorkerTable.$inferSelect | undefined = yield* db
+            .select()
+            .from(JobWorkerTable)
+            .where(eq(JobWorkerTable.id, id))
+            .get()
+            .pipe(Effect.orDie)
+          if (!row) break
+          rulesets.unshift(row.permissions)
+          id = row.parent_id ?? undefined
+        }
+        return rulesets
       }),
 
       verifications: Effect.fn("JobStore.verifications")(function* (jobID) {

@@ -139,6 +139,17 @@ export const isWorkerTerminal = (status: WorkerStatus) => WORKER_TERMINAL.includ
  */
 export const LEASE_MS = 120_000
 
+/**
+ * How deep a worker tree may go, and how wide.
+ *
+ * A planner spawning scouts that spawn helpers is the intended shape; anything
+ * deeper is usually a worker that failed to decompose and is recursing instead.
+ * The depth bound is also what makes walking a worker's permission chain a
+ * bounded read rather than an unbounded one.
+ */
+export const MAX_DEPTH = 4
+export const MAX_WORKERS = 64
+
 export const AttemptStatus = Schema.Literals(["running", "completed", "failed", "cancelled", "stale"]).annotate({
   identifier: "Job.AttemptStatus",
 })

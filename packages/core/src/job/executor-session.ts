@@ -31,16 +31,18 @@ import { JobExecutor } from "./executor"
  *
  * ## Permissions
  *
- * The worker carries a ruleset already clamped against its parent's, computed
- * when it was created. Capability monotonicity is therefore settled before an
- * attempt starts rather than negotiated here.
+ * A worker stores the ruleset it asked for, not one flattened against its
+ * parent's. Flattening two ordered wildcard rulesets into a third cannot be done
+ * soundly, and the attempt to do it was worse than the hole it closed. What
+ * answers a permission question is `Capability.effective` over the worker's
+ * whole chain, read with `JobStore.chain`.
  *
  * What remains open is the last hop: the session runtime resolves permissions
- * from the agent, so the clamped ruleset is recorded on the worker and readable
- * afterwards, but a session does not yet accept an explicit ruleset to run
- * under. Until it does, a child whose agent is more permissive than its parent
- * is denied on paper and permitted in practice. That hop is tracked as
- * remaining phase 4 work and is not papered over here.
+ * from the agent alone, so the chain is recorded and auditable but is not
+ * consulted inside the session. Until a session accepts a chain to run under, a
+ * child whose agent is more permissive than its parent is denied on paper and
+ * permitted in practice. That hop is tracked as remaining phase 4 work and is
+ * not papered over here.
  *
  * @module
  */

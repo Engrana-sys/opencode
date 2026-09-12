@@ -6,7 +6,6 @@ import { Job } from "@opencode-ai/schema/job"
 import { JobEvent } from "@opencode-ai/schema/job-event"
 import { Database } from "./database/database"
 import { makeGlobalNode } from "./effect/app-node"
-import { Capability } from "./permission/capability"
 import { EventV2 } from "./event"
 import { JobStore } from "./job/store"
 import { JobWorkerLeaseTable } from "./job/sql"
@@ -36,14 +35,8 @@ export const Info = Job.Info
 export type Info = Job.Info
 export const Event = JobEvent
 
-/**
- * How deep a worker tree may go.
- *
- * A planner spawning scouts that spawn helpers is the intended shape; anything
- * deeper is usually a worker that failed to decompose and is recursing instead.
- */
-export const MAX_DEPTH = 4
-export const MAX_WORKERS = 64
+export const MAX_DEPTH = Job.MAX_DEPTH
+export const MAX_WORKERS = Job.MAX_WORKERS
 
 export class JobNotFoundError extends Schema.TaggedErrorClass<JobNotFoundError>()("Job.NotFoundError", {
   jobID: Job.ID,
@@ -151,9 +144,9 @@ export interface Interface {
     /** The model this worker is spawned to use; concurrency limits read it before any attempt exists. */
     readonly requested: Job.ModelRef
     /**
-     * What this worker's agent asks for. It is clamped against the parent's
-     * effective set before being stored, so asking for more than the parent
-     * holds grants nothing.
+     * What this worker's agent asks for, stored as asked. Asking for more than
+     * an ancestor holds grants nothing: every check evaluates the whole chain
+     * through `Capability.effective` and keeps the most restrictive answer.
      */
     readonly permissions?: Permission.Ruleset
     readonly stepID?: Job.StepID
@@ -355,12 +348,16 @@ const layer = Layer.effect(
         role: input.role,
         agent: input.agent,
         requested: input.requested,
-        // Clamped here rather than at the call site. An invariant that depends
-        // on every caller remembering it is not an invariant.
-        permissions: Capability.clamp({
-          parent: parent?.permissions ?? [],
-          child: input.permissions ?? [],
-        }),
+        // Stored as asked for, not flattened against the parent.
+        //
+        // Flattening was unsound: two ordered wildcard rulesets have no
+        // intersection expressible as a third, and every attempt to write one
+        // traded an escalation for a regression — a parent's own narrow
+        // exceptions nullified for its children, or a child unable to deny what
+        // its parent merely asks about. What is intersected is the *decision*,
+        // per query, over the whole chain; `JobStore.chain` reads that chain and
+        // `Capability.effective` answers from it.
+        permissions: input.permissions ?? [],
         ...(input.stepID === undefined ? {} : { stepID: input.stepID }),
         ...(input.parentID === undefined ? {} : { parentID: input.parentID }),
         ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
