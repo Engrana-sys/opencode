@@ -388,43 +388,50 @@ const layer = Layer.effect(
           to: input.to,
         })
       const now = yield* DateTime.now
-      yield* events.publish(JobEvent.WorkerStatusChanged, {
-        jobID: worker.jobID,
-        timestamp: now,
-        workerID: input.workerID,
-        from: worker.status,
-        to: input.to,
-        ...(input.reason === undefined ? {} : { reason: input.reason }),
-        ...(input.retryAfterMs === undefined
-          ? {}
-          : { retryAfter: DateTime.addDuration(now, input.retryAfterMs) }),
-      })
-      // The lease is granted and released by the transition itself rather than
-      // by the first heartbeat, so there is no window where a worker reads
-      // `running` holding nothing and recovery reclaims it out from under its
-      // own executor. It is written here and not in the projector because a
-      // projection may be dropped and rebuilt, and a rebuild must not decide
-      // what is running right now.
       const millis = DateTime.toEpochMillis(now)
-      if (input.to === "running")
-        yield* db
-          .insert(JobWorkerLeaseTable)
-          .values({ worker_id: input.workerID, heartbeat_at: millis, lease_until: millis + Job.LEASE_MS })
-          .onConflictDoUpdate({
-            target: JobWorkerLeaseTable.worker_id,
-            set: { heartbeat_at: millis, lease_until: millis + Job.LEASE_MS },
-          })
-          .run()
-          .pipe(Effect.orDie)
-      // Anything else means this worker is no longer executing: queued and
-      // waiting for a slot, waiting on a person, or finished. Leaving a lease
-      // behind would vouch for work nobody is doing.
-      else
-        yield* db
-          .delete(JobWorkerLeaseTable)
-          .where(eq(JobWorkerLeaseTable.worker_id, input.workerID))
-          .run()
-          .pipe(Effect.orDie)
+      /**
+       * The lease moves with the status, in the same transaction.
+       *
+       * `publish` runs this inside the transaction that appends the event, so
+       * the two land together or neither does. Writing it afterwards leaves a
+       * committed, observable state where a worker reads `running` and holds no
+       * lease — which is precisely the shape `JobStore.expired` reclaims, so a
+       * recovery scan or a crash in that gap takes the worker away from its own
+       * executor.
+       *
+       * It does not go in the projector, which is where it used to live: a
+       * projection may be dropped and rebuilt, and a rebuild must not get to
+       * decide what is running right now.
+       */
+      const lease =
+        input.to === "running"
+          ? db
+              .insert(JobWorkerLeaseTable)
+              .values({ worker_id: input.workerID, heartbeat_at: millis, lease_until: millis + Job.LEASE_MS })
+              .onConflictDoUpdate({
+                target: JobWorkerLeaseTable.worker_id,
+                set: { heartbeat_at: millis, lease_until: millis + Job.LEASE_MS },
+              })
+              .run()
+          : // Anything else means this worker is no longer executing: queued and
+            // waiting for a slot, waiting on a person, or finished. Leaving a
+            // lease behind would vouch for work nobody is doing.
+            db.delete(JobWorkerLeaseTable).where(eq(JobWorkerLeaseTable.worker_id, input.workerID)).run()
+      yield* events.publish(
+        JobEvent.WorkerStatusChanged,
+        {
+          jobID: worker.jobID,
+          timestamp: now,
+          workerID: input.workerID,
+          from: worker.status,
+          to: input.to,
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          ...(input.retryAfterMs === undefined
+            ? {}
+            : { retryAfter: DateTime.addDuration(now, input.retryAfterMs) }),
+        },
+        { commit: () => lease.pipe(Effect.orDie) },
+      )
       return true
     })
 
