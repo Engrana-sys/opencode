@@ -138,31 +138,74 @@ const layer = (limits: JobAdmission.Limits) =>
         // there is no window where the worker reads `running` with none and
         // recovery can reclaim it out from under us.
         if (!(yield* jobs.workerStatus({ workerID: input.worker.id, to: "running" }))) return undefined
-        // Provisioned on admission rather than on creation: a worker that never
-        // runs should leave no checkout behind. A worker that already holds one
-        // keeps it, so a retry resumes in the tree its previous attempt used.
-        let worktree = input.worker.worktree
-        if (worktree === undefined) {
-          const provisioned = yield* worktrees.provision({
-            job: input.job,
-            workerID: input.worker.id,
-            role: input.worker.role,
-          })
-          if (provisioned) {
-            yield* jobs.assignWorktree({ workerID: input.worker.id, worktree: provisioned })
-            worktree = provisioned
+
+        /**
+         * Everything after the claim runs inside the forked fiber.
+         *
+         * Provisioning a worktree shells out to git and takes seconds. Doing it
+         * out here left the worker reading `running` with no entry in `fibers`
+         * for all of that, and `halt` interrupts by fiber — so a job whose
+         * budget ran out could not stop a worker that had not finished starting,
+         * and the budget went back to being advisory. Forking first makes the
+         * gap a single synchronous step with nothing to suspend on.
+         */
+        const work = Effect.gen(function* () {
+          // Provisioned on admission rather than on creation: a worker that
+          // never runs should leave no checkout behind. A worker that already
+          // holds one keeps it, so a retry resumes in the tree its previous
+          // attempt used.
+          let worktree = input.worker.worktree
+          if (worktree === undefined) {
+            const provisioned = yield* worktrees.provision({
+              job: input.job,
+              workerID: input.worker.id,
+              role: input.worker.role,
+            })
+            if (provisioned) {
+              yield* jobs.assignWorktree({ workerID: input.worker.id, worktree: provisioned })
+              worktree = provisioned
+            }
           }
-        }
-        const attempt = yield* jobs.startAttempt({
-          workerID: input.worker.id,
-          requested: input.worker.requested,
+          // Re-read the claim. Provisioning is long enough for `halt` to settle
+          // this job or for recovery to declare the worker stale, and starting
+          // an attempt afterwards would run work the ledger has already
+          // accounted for as stopped.
+          const current = yield* store.worker(input.worker.id)
+          if (!current || current.status !== "running") return
+          const attempt = yield* jobs.startAttempt({
+            workerID: input.worker.id,
+            requested: input.worker.requested,
+          })
+          // Carried explicitly: `input.worker` was read before the tree existed,
+          // and handing the executor that stale copy is how a worker ends up
+          // working outside the tree the ledger says it owns.
+          const worker = worktree === undefined ? input.worker : { ...input.worker, worktree }
+          const outcome = yield* beating(input.worker.id, executor.run({ job: input.job, worker, attempt }))
+          yield* settle({ workerID: input.worker.id, attempt }, outcome)
         })
-        // Carried explicitly: `input.worker` was read before the tree existed,
-        // and handing the executor that stale copy is how a worker ends up
-        // working outside the tree the ledger says it owns.
-        const worker = worktree === undefined ? input.worker : { ...input.worker, worktree }
-        const fiber = yield* beating(input.worker.id, executor.run({ job: input.job, worker, attempt })).pipe(
-          Effect.flatMap((outcome) => settle({ workerID: input.worker.id, attempt }, outcome)),
+
+        const fiber = yield* work.pipe(
+          /**
+           * A worker that stopped before it had an attempt goes back to the
+           * queue rather than staying `running` and empty.
+           *
+           * Interrupting `git worktree add` used to strand it: recovery finds a
+           * `running` worker with no attempt, calls that stalled, and `stale` is
+           * terminal — so a transient failure during startup lost the worker
+           * permanently, where the old ordering simply left it queued to be
+           * re-admitted. `halt` settles the worker itself, and a terminal status
+           * is what tells this apart from a startup that merely failed.
+           */
+          Effect.onExit(() =>
+            Effect.gen(function* () {
+              const current = yield* store.worker(input.worker.id)
+              if (!current || Job.isWorkerTerminal(current.status)) return
+              if ((yield* store.attempts(input.worker.id)).length > 0) return
+              yield* jobs
+                .workerStatus({ workerID: input.worker.id, to: "queued", reason: "Stopped before an attempt began" })
+                .pipe(Effect.ignore)
+            }),
+          ),
           Effect.ensuring(Effect.sync(() => fibers.delete(input.worker.id))),
           // A slot freed now must be taken now, not at the next tick.
           Effect.ensuring(wake),
